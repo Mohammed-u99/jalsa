@@ -1,0 +1,1648 @@
+<script>
+// ============================================
+// Global State
+// ============================================
+const state = {
+  settings: {},
+  cycles: [],
+  currentCycle: null,
+  members: [],
+  snapshot: null,
+  banks: [],
+  categories: [],
+  todayRiyadh: '',
+  loading: false
+};
+
+// English month names
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+// ============================================
+// Initialization
+// ============================================
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    // Calculate today in Riyadh timezone
+    state.todayRiyadh = getTodayRiyadh();
+    document.getElementById('today-date').textContent = formatDate(state.todayRiyadh);
+
+    // Setup navigation
+    setupNavigation();
+
+    // Load initial data
+    await loadAllData();
+
+    // Hide loading overlay
+    document.getElementById('loading-overlay').classList.add('hidden');
+  } catch (error) {
+    showToast('Error initializing: ' + error.message, 'error');
+    console.error(error);
+  }
+});
+
+// ============================================
+// Date Utilities (Riyadh Timezone)
+// ============================================
+function getTodayRiyadh() {
+  const now = new Date();
+  // Get date in Asia/Riyadh timezone
+  const options = { timeZone: 'Asia/Riyadh', year: 'numeric', month: '2-digit', day: '2-digit' };
+  const parts = new Intl.DateTimeFormat('en-CA', options).formatToParts(now);
+  const year = parts.find(p => p.type === 'year').value;
+  const month = parts.find(p => p.type === 'month').value;
+  const day = parts.find(p => p.type === 'day').value;
+  return `${year}-${month}-${day}`;
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '-';
+  const [year, month, day] = dateStr.split('-');
+  return `${day} ${MONTH_NAMES[parseInt(month) - 1]} ${year}`;
+}
+
+function getCycleNameFromKey(cycleKey) {
+  if (!cycleKey) return '-';
+  const [year, month] = cycleKey.split('-');
+  return `${MONTH_NAMES[parseInt(month) - 1]} ${year}`;
+}
+
+function getCycleKeyFromDate(dateStr) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  let cycleYear = year;
+  let cycleMonth = month;
+
+  if (day >= 27) {
+    cycleMonth += 1;
+    if (cycleMonth > 12) {
+      cycleMonth = 1;
+      cycleYear += 1;
+    }
+  }
+
+  return `${cycleYear}-${String(cycleMonth).padStart(2, '0')}`;
+}
+
+// ============================================
+// API Functions
+// ============================================
+function callApi(action, data = {}) {
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(response => {
+        if (response.success) {
+          resolve(response.data);
+        } else {
+          reject(new Error(response.error || 'Unknown error'));
+        }
+      })
+      .withFailureHandler(error => {
+        reject(new Error(error.message || 'API call failed'));
+      })
+      .doPost({ postData: { contents: JSON.stringify({ action, data }) } });
+  });
+}
+
+// Wrapper to handle API calls with loading state
+async function apiCall(action, data = {}) {
+  try {
+    setLoading(true);
+    const result = await callApi(action, data);
+    return result;
+  } finally {
+    setLoading(false);
+  }
+}
+
+function setLoading(loading) {
+  state.loading = loading;
+  // Could show a loading indicator here
+}
+
+// ============================================
+// Data Loading
+// ============================================
+async function loadAllData() {
+  try {
+    // Ensure cycles are current first
+    await callApi('ensureCyclesCurrent');
+
+    // Load all data in parallel
+    const [settings, cyclesData, membersData, banks, categories] = await Promise.all([
+      callApi('getSettings'),
+      callApi('getCycles'),
+      callApi('getMembers'),
+      callApi('getBanks'),
+      callApi('getCategories')
+    ]);
+
+    state.settings = settings;
+    state.cycles = cyclesData.cycles;
+    state.currentCycle = cyclesData.currentCycle;
+    state.members = membersData.members;
+    state.banks = banks.banks;
+    state.categories = categories.categories;
+
+    // Update UI
+    updateCurrentCycleDisplay();
+    populateCycleSelectors();
+    populateMemberSelectors();
+    populateCategorySelectors();
+
+    // Load snapshot for dashboard
+    await loadSnapshot();
+
+    // Render current view
+    renderCurrentView();
+
+    // Update settings view
+    renderSettingsView();
+  } catch (error) {
+    showToast('Error loading data: ' + error.message, 'error');
+    console.error(error);
+  }
+}
+
+async function loadSnapshot(startCycle, endCycle) {
+  try {
+    startCycle = startCycle || state.settings.systemStartCycle || '2025-09';
+    endCycle = endCycle || (state.currentCycle ? state.currentCycle.cycleKey : startCycle);
+
+    state.snapshot = await callApi('getSnapshot', { startCycle, endCycle });
+    return state.snapshot;
+  } catch (error) {
+    console.error('Error loading snapshot:', error);
+    return null;
+  }
+}
+
+// ============================================
+// Navigation
+// ============================================
+function setupNavigation() {
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const view = btn.dataset.view;
+      switchView(view);
+    });
+  });
+}
+
+function switchView(viewName) {
+  // Update nav buttons
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === viewName);
+  });
+
+  // Update views
+  document.querySelectorAll('.view').forEach(view => {
+    view.classList.toggle('active', view.id === `view-${viewName}`);
+  });
+
+  // Render view content
+  renderCurrentView();
+}
+
+function renderCurrentView() {
+  const activeView = document.querySelector('.view.active');
+  if (!activeView) return;
+
+  const viewId = activeView.id.replace('view-', '');
+
+  switch (viewId) {
+    case 'dashboard':
+      renderDashboard();
+      break;
+    case 'members':
+      renderMembersView();
+      break;
+    case 'payments':
+      renderPaymentsView();
+      break;
+    case 'expenses':
+      renderExpensesView();
+      break;
+    case 'adjustments':
+      renderAdjustmentsView();
+      break;
+    case 'reports':
+      renderReportsView();
+      break;
+    case 'settings':
+      renderSettingsView();
+      break;
+  }
+}
+
+// ============================================
+// UI Updates
+// ============================================
+function updateCurrentCycleDisplay() {
+  const cycleEl = document.getElementById('current-cycle');
+  if (state.currentCycle) {
+    cycleEl.textContent = state.currentCycle.cycleName;
+  }
+}
+
+function populateCycleSelectors() {
+  const selectors = [
+    'dashboard-cycle-filter',
+    'payment-cycle-filter',
+    'expense-cycle-filter',
+    'adjustment-cycle-filter',
+    'report-start-cycle',
+    'report-end-cycle',
+    'override-cycle-select'
+  ];
+
+  const cycles = state.cycles.slice().sort((a, b) => b.cycleKey.localeCompare(a.cycleKey));
+
+  selectors.forEach(id => {
+    const select = document.getElementById(id);
+    if (!select) return;
+
+    const currentValue = select.value;
+
+    // Keep first option for filters
+    if (id.includes('filter')) {
+      select.innerHTML = '<option value="">All Cycles</option>';
+    } else {
+      select.innerHTML = '';
+    }
+
+    cycles.forEach(cycle => {
+      // For override selector, only show future cycles
+      if (id === 'override-cycle-select') {
+        if (state.currentCycle && cycle.cycleKey <= state.currentCycle.cycleKey) {
+          return;
+        }
+      }
+
+      const option = document.createElement('option');
+      option.value = cycle.cycleKey;
+      option.textContent = cycle.cycleName;
+      select.appendChild(option);
+    });
+
+    // Restore value if possible
+    if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
+      select.value = currentValue;
+    } else if (id === 'report-end-cycle' && state.currentCycle) {
+      select.value = state.currentCycle.cycleKey;
+    } else if (id === 'report-start-cycle' && state.settings.systemStartCycle) {
+      select.value = state.settings.systemStartCycle;
+    }
+  });
+}
+
+function populateMemberSelectors() {
+  const selectors = ['payment-member-filter'];
+  const activeMembers = state.members.filter(m => m.status === 'Active');
+
+  selectors.forEach(id => {
+    const select = document.getElementById(id);
+    if (!select) return;
+
+    select.innerHTML = '<option value="">All Members</option>';
+
+    activeMembers.forEach(member => {
+      const option = document.createElement('option');
+      option.value = member.memberId;
+      option.textContent = member.displayName;
+      select.appendChild(option);
+    });
+  });
+}
+
+function populateCategorySelectors() {
+  const select = document.getElementById('expense-category-filter');
+  if (!select) return;
+
+  select.innerHTML = '<option value="">All Categories</option>';
+
+  state.categories.forEach(cat => {
+    const option = document.createElement('option');
+    option.value = cat.categoryName;
+    option.textContent = cat.categoryName;
+    select.appendChild(option);
+  });
+}
+
+// ============================================
+// Dashboard Rendering
+// ============================================
+function renderDashboard() {
+  if (!state.snapshot) return;
+
+  const { summary, memberBalances, alerts } = state.snapshot;
+
+  // Update summary cards
+  document.getElementById('treasury-balance').textContent = formatCurrency(summary.treasuryCashBalance);
+  document.getElementById('net-cash-flow').textContent = formatCurrency(summary.netCashFlow);
+  document.getElementById('total-outstanding').textContent = formatCurrency(summary.totalOutstanding);
+  document.getElementById('total-credits').textContent = formatCurrency(summary.totalCredits);
+
+  // Update alerts
+  renderAlerts(alerts);
+
+  // Update member balances table
+  renderMemberBalancesTable(memberBalances);
+
+  // Update recent transactions
+  renderRecentTransactions();
+}
+
+function renderAlerts(alerts) {
+  const container = document.getElementById('alerts-container');
+  const section = document.getElementById('alerts-section');
+
+  container.innerHTML = '';
+  let hasAlerts = false;
+
+  if (alerts.negativeCash) {
+    hasAlerts = true;
+    container.innerHTML += `<div class="alert danger">Treasury cash balance is negative!</div>`;
+  }
+
+  if (alerts.overdueMembers && alerts.overdueMembers.length > 0) {
+    hasAlerts = true;
+    const names = alerts.overdueMembers.map(id => {
+      const member = state.members.find(m => m.memberId === id);
+      return member ? member.displayName : 'Unknown';
+    }).join(', ');
+    container.innerHTML += `<div class="alert warning">Overdue members: ${names}</div>`;
+  }
+
+  if (alerts.leftOpenDebtMembers && alerts.leftOpenDebtMembers.length > 0) {
+    hasAlerts = true;
+    const names = alerts.leftOpenDebtMembers.map(id => {
+      const member = state.members.find(m => m.memberId === id);
+      return member ? member.displayName : 'Unknown';
+    }).join(', ');
+    container.innerHTML += `<div class="alert warning">Members with open debt: ${names}</div>`;
+  }
+
+  if (alerts.unpaidPlannedItems && alerts.unpaidPlannedItems.length > 0) {
+    hasAlerts = true;
+    container.innerHTML += `<div class="alert info">${alerts.unpaidPlannedItems.length} planned expense(s) awaiting payment</div>`;
+  }
+
+  section.classList.toggle('hidden', !hasAlerts);
+}
+
+function renderMemberBalancesTable(memberBalances) {
+  const tbody = document.querySelector('#member-balances-table tbody');
+  tbody.innerHTML = '';
+
+  const activeMembers = memberBalances.filter(m => m.status === 'Active' || m.status === 'LeftOpenDebt');
+
+  activeMembers.forEach(member => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(member.displayName)}</td>
+      <td><span class="status-badge ${member.status.toLowerCase()}">${member.status}</span></td>
+      <td class="number">${formatCurrency(member.totalDues)}</td>
+      <td class="number">${formatCurrency(member.totalPayments)}</td>
+      <td class="number">${formatCurrency(member.activeCredit)}</td>
+      <td class="number ${member.effectiveBalance > 0 ? 'negative' : 'positive'}">${formatCurrency(member.effectiveBalance)}</td>
+      <td>
+        <button class="btn btn-sm btn-secondary" onclick="viewMemberLedger('${member.memberId}')">Ledger</button>
+        <button class="btn btn-sm btn-primary" onclick="showQuickPaymentModal('${member.memberId}')">Pay</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderRecentTransactions() {
+  const tbody = document.querySelector('#recent-transactions-table tbody');
+  tbody.innerHTML = '';
+
+  if (!state.snapshot) return;
+
+  // Combine payments and expenses, sort by date descending
+  const transactions = [];
+
+  state.snapshot.payments.forEach(p => {
+    transactions.push({
+      date: p.operationDate,
+      type: 'Payment',
+      member: p.memberName,
+      description: p.method + (p.bankName ? ` (${p.bankName})` : ''),
+      amount: p.amount,
+      isCredit: true
+    });
+  });
+
+  state.snapshot.expenses.filter(e => !e.isPlanned).forEach(e => {
+    transactions.push({
+      date: e.operationDate,
+      type: 'Expense',
+      member: e.paidBy === 'Member' ? e.paidByMemberName : 'Treasury',
+      description: `${e.category}: ${e.description}`,
+      amount: e.amount,
+      isCredit: false
+    });
+  });
+
+  // Sort by date descending
+  transactions.sort((a, b) => b.date.localeCompare(a.date));
+
+  // Show last 10
+  transactions.slice(0, 10).forEach(t => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${formatDate(t.date)}</td>
+      <td>${t.type}</td>
+      <td>${escapeHtml(t.member || '-')}</td>
+      <td>${escapeHtml(t.description)}</td>
+      <td class="number ${t.isCredit ? 'positive' : 'negative'}">${t.isCredit ? '+' : '-'}${formatCurrency(t.amount)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ============================================
+// Members View
+// ============================================
+function renderMembersView() {
+  const tbody = document.querySelector('#members-table tbody');
+  tbody.innerHTML = '';
+
+  let members = state.members;
+
+  // Apply status filter
+  const statusFilter = document.getElementById('member-status-filter').value;
+  if (statusFilter) {
+    members = members.filter(m => m.status === statusFilter);
+  }
+
+  // Apply search
+  const search = document.getElementById('members-search').value.toLowerCase();
+  if (search) {
+    members = members.filter(m =>
+      m.displayName.toLowerCase().includes(search) ||
+      (m.phone && m.phone.includes(search))
+    );
+  }
+
+  members.forEach(member => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(member.displayName)}</td>
+      <td>${getCycleNameFromKey(member.startCycle)}</td>
+      <td>${member.endCycle ? getCycleNameFromKey(member.endCycle) : '-'}</td>
+      <td>
+        <span class="status-badge ${member.status.toLowerCase()}">${member.status}</span>
+        ${member.status === 'LeftOpenDebt' ? '<span class="status-badge pending">Pending Settlement</span>' : ''}
+      </td>
+      <td class="number ${member.effectiveBalance > 0 ? 'negative' : 'positive'}">${formatCurrency(member.effectiveBalance)}</td>
+      <td>${member.phone || member.email || '-'}</td>
+      <td>
+        <button class="btn btn-sm btn-secondary" onclick="viewMemberLedger('${member.memberId}')">Ledger</button>
+        ${member.status === 'Active' ? `<button class="btn btn-sm btn-warning" onclick="showMarkLeftModal('${member.memberId}')">Mark Left</button>` : ''}
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// Setup member filters
+document.getElementById('member-status-filter')?.addEventListener('change', renderMembersView);
+document.getElementById('members-search')?.addEventListener('input', renderMembersView);
+
+// ============================================
+// Payments View
+// ============================================
+function renderPaymentsView() {
+  if (!state.snapshot) return;
+
+  const tbody = document.querySelector('#payments-table tbody');
+  tbody.innerHTML = '';
+
+  let payments = state.snapshot.payments;
+
+  // Apply cycle filter
+  const cycleFilter = document.getElementById('payment-cycle-filter').value;
+  if (cycleFilter) {
+    payments = payments.filter(p => p.cycleKey === cycleFilter);
+  }
+
+  // Apply member filter
+  const memberFilter = document.getElementById('payment-member-filter').value;
+  if (memberFilter) {
+    payments = payments.filter(p => p.memberId === memberFilter);
+  }
+
+  // Sort by date descending
+  payments.sort((a, b) => b.operationDate.localeCompare(a.operationDate));
+
+  payments.forEach(payment => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${formatDate(payment.operationDate)}</td>
+      <td>${escapeHtml(payment.cycleName)}</td>
+      <td>${escapeHtml(payment.memberName)}</td>
+      <td class="number">${formatCurrency(payment.amount)}</td>
+      <td>${payment.method}</td>
+      <td>${payment.bankName || ''} ${payment.notes || ''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// Setup payment filters
+document.getElementById('payment-cycle-filter')?.addEventListener('change', renderPaymentsView);
+document.getElementById('payment-member-filter')?.addEventListener('change', renderPaymentsView);
+document.getElementById('payments-search')?.addEventListener('input', renderPaymentsView);
+
+// ============================================
+// Expenses View
+// ============================================
+function renderExpensesView() {
+  if (!state.snapshot) return;
+
+  // Render planned expenses
+  const plannedTbody = document.querySelector('#planned-expenses-table tbody');
+  plannedTbody.innerHTML = '';
+
+  const plannedExpenses = state.snapshot.expenses.filter(e => e.isPlanned);
+  const plannedCard = document.getElementById('planned-expenses-card');
+  plannedCard.classList.toggle('hidden', plannedExpenses.length === 0);
+
+  plannedExpenses.forEach(expense => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(expense.category)}</td>
+      <td>${escapeHtml(expense.description)}</td>
+      <td class="number">${expense.amount ? formatCurrency(expense.amount) : 'Variable'}</td>
+      <td>
+        <button class="btn btn-sm btn-primary" onclick="showMarkExpensePaidModal('${expense.expenseId}')">Mark Paid</button>
+      </td>
+    `;
+    plannedTbody.appendChild(tr);
+  });
+
+  // Render expense history
+  const tbody = document.querySelector('#expenses-table tbody');
+  tbody.innerHTML = '';
+
+  let expenses = state.snapshot.expenses.filter(e => !e.isPlanned);
+
+  // Apply cycle filter
+  const cycleFilter = document.getElementById('expense-cycle-filter').value;
+  if (cycleFilter) {
+    expenses = expenses.filter(e => e.cycleKey === cycleFilter);
+  }
+
+  // Apply category filter
+  const categoryFilter = document.getElementById('expense-category-filter').value;
+  if (categoryFilter) {
+    expenses = expenses.filter(e => e.category === categoryFilter);
+  }
+
+  // Sort by date descending
+  expenses.sort((a, b) => b.operationDate.localeCompare(a.operationDate));
+
+  expenses.forEach(expense => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${formatDate(expense.operationDate)}</td>
+      <td>${escapeHtml(expense.cycleName)}</td>
+      <td>${escapeHtml(expense.category)}</td>
+      <td>${escapeHtml(expense.description)}</td>
+      <td class="number">${formatCurrency(expense.amount)}</td>
+      <td>${expense.paidBy}${expense.paidBy === 'Member' ? ` (${expense.paidByMemberName})` : ''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// Setup expense filters
+document.getElementById('expense-cycle-filter')?.addEventListener('change', renderExpensesView);
+document.getElementById('expense-category-filter')?.addEventListener('change', renderExpensesView);
+document.getElementById('expenses-search')?.addEventListener('input', renderExpensesView);
+
+// ============================================
+// Adjustments View
+// ============================================
+function renderAdjustmentsView() {
+  if (!state.snapshot) return;
+
+  // Render adjustments
+  const adjTbody = document.querySelector('#adjustments-table tbody');
+  adjTbody.innerHTML = '';
+
+  let adjustments = state.snapshot.adjustments;
+
+  const cycleFilter = document.getElementById('adjustment-cycle-filter').value;
+  if (cycleFilter) {
+    adjustments = adjustments.filter(a => a.cycleKey === cycleFilter);
+  }
+
+  adjustments.sort((a, b) => b.operationDate.localeCompare(a.operationDate));
+
+  adjustments.forEach(adj => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${formatDate(adj.operationDate)}</td>
+      <td>${escapeHtml(adj.cycleName)}</td>
+      <td>${adj.entityType}</td>
+      <td>${adj.memberName || '-'}</td>
+      <td class="number ${adj.amount >= 0 ? 'negative' : 'positive'}">${formatCurrency(adj.amount)}</td>
+      <td>${escapeHtml(adj.reason)}</td>
+    `;
+    adjTbody.appendChild(tr);
+  });
+
+  // Render settlements
+  const settleTbody = document.querySelector('#settlements-table tbody');
+  settleTbody.innerHTML = '';
+
+  state.snapshot.settlements.sort((a, b) => b.operationDate.localeCompare(a.operationDate));
+
+  state.snapshot.settlements.forEach(s => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${formatDate(s.operationDate)}</td>
+      <td>${escapeHtml(s.cycleName)}</td>
+      <td>${escapeHtml(s.memberName)}</td>
+      <td class="number">${formatCurrency(s.amount)}</td>
+      <td>${escapeHtml(s.notes || '-')}</td>
+    `;
+    settleTbody.appendChild(tr);
+  });
+}
+
+document.getElementById('adjustment-cycle-filter')?.addEventListener('change', renderAdjustmentsView);
+
+// ============================================
+// Reports View
+// ============================================
+function renderReportsView() {
+  if (!state.snapshot) return;
+
+  const tbody = document.querySelector('#cycle-summary-table tbody');
+  tbody.innerHTML = '';
+
+  state.cycles.sort((a, b) => b.cycleKey.localeCompare(a.cycleKey));
+
+  state.cycles.forEach(cycle => {
+    const cycleDues = state.snapshot.dues.filter(d => d.cycleKey === cycle.cycleKey);
+    const cyclePayments = state.snapshot.payments.filter(p => p.cycleKey === cycle.cycleKey);
+    const cycleExpenses = state.snapshot.expenses.filter(e => e.cycleKey === cycle.cycleKey && !e.isPlanned);
+
+    const totalDues = cycleDues.reduce((sum, d) => sum + parseFloat(d.amount), 0);
+    const totalPayments = cyclePayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    const totalExpenses = cycleExpenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+    const netFlow = totalPayments - cycleExpenses.filter(e => e.paidBy === 'Treasury').reduce((sum, e) => sum + parseFloat(e.amount), 0);
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(cycle.cycleName)}</td>
+      <td><span class="status-badge ${cycle.status.toLowerCase()}">${cycle.status}</span></td>
+      <td class="number">${formatCurrency(totalDues)}</td>
+      <td class="number">${formatCurrency(totalPayments)}</td>
+      <td class="number">${formatCurrency(totalExpenses)}</td>
+      <td class="number ${netFlow >= 0 ? 'positive' : 'negative'}">${formatCurrency(netFlow)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ============================================
+// Settings View
+// ============================================
+function renderSettingsView() {
+  // System info
+  document.getElementById('schema-version').textContent = state.settings.schemaVersion || '-';
+  document.getElementById('system-start').textContent = getCycleNameFromKey(state.settings.systemStartCycle);
+  document.getElementById('timezone').textContent = state.settings.timezone || 'Asia/Riyadh';
+  document.getElementById('default-due').textContent = formatCurrency(state.settings.defaultDueAmount || 150);
+
+  // Current cycle
+  if (state.currentCycle) {
+    document.getElementById('current-cycle-name').textContent = state.currentCycle.cycleName;
+    document.getElementById('current-cycle-status').textContent = state.currentCycle.status;
+  }
+
+  // Banks list
+  const banksList = document.getElementById('banks-list');
+  banksList.innerHTML = '';
+  state.banks.forEach(bank => {
+    const li = document.createElement('li');
+    li.textContent = bank.bankName;
+    banksList.appendChild(li);
+  });
+
+  // Categories list
+  const categoriesList = document.getElementById('categories-list');
+  categoriesList.innerHTML = '';
+  state.categories.forEach(cat => {
+    const li = document.createElement('li');
+    li.textContent = cat.categoryName;
+    categoriesList.appendChild(li);
+  });
+}
+
+// ============================================
+// Modal Functions
+// ============================================
+function showModal(title, content) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-content').innerHTML = content;
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.add('hidden');
+}
+
+// Close modal on overlay click
+document.getElementById('modal-overlay')?.addEventListener('click', (e) => {
+  if (e.target.id === 'modal-overlay') {
+    closeModal();
+  }
+});
+
+// ============================================
+// Add Member Modal
+// ============================================
+function showAddMemberModal() {
+  const content = `
+    <form id="add-member-form" onsubmit="handleAddMember(event)">
+      <div class="form-group">
+        <label>Display Name *</label>
+        <input type="text" name="displayName" class="form-input" required>
+      </div>
+      <div class="form-group">
+        <label>Start Cycle</label>
+        <select name="startCycle" class="select-input">
+          ${state.cycles.map(c => `<option value="${c.cycleKey}" ${c.cycleKey === state.currentCycle?.cycleKey ? 'selected' : ''}>${c.cycleName}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="text" name="phone" class="form-input">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" name="email" class="form-input">
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea name="notes" class="form-input" rows="2"></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Add Member</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Add New Member', content);
+}
+
+async function handleAddMember(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    displayName: form.displayName.value,
+    startCycle: form.startCycle.value,
+    phone: form.phone.value,
+    email: form.email.value,
+    notes: form.notes.value
+  };
+
+  try {
+    await apiCall('createMember', data);
+    showToast('Member added successfully', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Add Payment Modal
+// ============================================
+function showAddPaymentModal() {
+  showQuickPaymentModal();
+}
+
+function showQuickPaymentModal(memberId = '') {
+  const activeMembers = state.members.filter(m => m.status === 'Active' || m.status === 'LeftOpenDebt');
+
+  const content = `
+    <form id="add-payment-form" onsubmit="handleAddPayment(event)">
+      <div class="form-group">
+        <label>Member *</label>
+        <select name="memberId" class="select-input" required>
+          <option value="">Select member...</option>
+          ${activeMembers.map(m => `<option value="${m.memberId}" ${m.memberId === memberId ? 'selected' : ''}>${m.displayName}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Amount (SAR) *</label>
+        <input type="number" name="amount" class="form-input" step="0.01" min="0.01" required>
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="date" name="operationDate" class="form-input" value="${state.todayRiyadh}">
+      </div>
+      <div class="form-group">
+        <label>Method *</label>
+        <select name="method" class="select-input" required onchange="toggleBankField(this.value)">
+          <option value="Cash">Cash</option>
+          <option value="BankTransfer">Bank Transfer</option>
+        </select>
+      </div>
+      <div id="bank-field" class="form-group hidden">
+        <label>Bank</label>
+        <select name="bankName" class="select-input">
+          <option value="">Select bank...</option>
+          ${state.banks.map(b => `<option value="${b.bankName}">${b.bankName}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea name="notes" class="form-input" rows="2"></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Record Payment</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Record Payment', content);
+}
+
+function toggleBankField(method) {
+  const bankField = document.getElementById('bank-field');
+  bankField.classList.toggle('hidden', method !== 'BankTransfer');
+}
+
+async function handleAddPayment(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    memberId: form.memberId.value,
+    amount: parseFloat(form.amount.value),
+    operationDate: form.operationDate.value,
+    method: form.method.value,
+    bankName: form.bankName?.value || '',
+    notes: form.notes.value
+  };
+
+  try {
+    await apiCall('createPayment', data);
+    showToast('Payment recorded successfully', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Add Expense Modal
+// ============================================
+function showAddExpenseModal() {
+  const activeMembers = state.members.filter(m => m.status === 'Active');
+
+  const content = `
+    <form id="add-expense-form" onsubmit="handleAddExpense(event)">
+      <div class="form-group">
+        <label>Category *</label>
+        <select name="category" class="select-input" required>
+          ${state.categories.map(c => `<option value="${c.categoryName}">${c.categoryName}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Description *</label>
+        <input type="text" name="description" class="form-input" required>
+      </div>
+      <div class="form-group">
+        <label>Amount (SAR) *</label>
+        <input type="number" name="amount" class="form-input" step="0.01" min="0.01" required>
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="date" name="operationDate" class="form-input" value="${state.todayRiyadh}">
+      </div>
+      <div class="form-group">
+        <label>Paid By *</label>
+        <select name="paidBy" class="select-input" required onchange="toggleMemberPaidField(this.value)">
+          <option value="Treasury">Treasury</option>
+          <option value="Member">Member</option>
+        </select>
+      </div>
+      <div id="member-paid-field" class="form-group hidden">
+        <label>Paying Member</label>
+        <select name="paidByMemberId" class="select-input">
+          <option value="">Select member...</option>
+          ${activeMembers.map(m => `<option value="${m.memberId}">${m.displayName}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea name="notes" class="form-input" rows="2"></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Add Expense</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Add Expense', content);
+}
+
+function toggleMemberPaidField(paidBy) {
+  const field = document.getElementById('member-paid-field');
+  field.classList.toggle('hidden', paidBy !== 'Member');
+}
+
+async function handleAddExpense(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    category: form.category.value,
+    description: form.description.value,
+    amount: parseFloat(form.amount.value),
+    operationDate: form.operationDate.value,
+    paidBy: form.paidBy.value,
+    paidByMemberId: form.paidByMemberId?.value || '',
+    notes: form.notes.value
+  };
+
+  try {
+    await apiCall('createExpense', data);
+    showToast('Expense added successfully', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Mark Expense Paid Modal
+// ============================================
+function showMarkExpensePaidModal(expenseId) {
+  const expense = state.snapshot.expenses.find(e => e.expenseId === expenseId);
+  if (!expense) return;
+
+  const activeMembers = state.members.filter(m => m.status === 'Active');
+
+  const content = `
+    <form id="mark-paid-form" onsubmit="handleMarkExpensePaid(event, '${expenseId}')">
+      <p class="mb-md">Marking planned expense: <strong>${expense.category} - ${expense.description}</strong></p>
+      <div class="form-group">
+        <label>Amount (SAR) *</label>
+        <input type="number" name="amount" class="form-input" step="0.01" min="0.01" value="${expense.amount || ''}" required>
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="date" name="operationDate" class="form-input" value="${state.todayRiyadh}">
+      </div>
+      <div class="form-group">
+        <label>Paid By *</label>
+        <select name="paidBy" class="select-input" required onchange="toggleMemberPaidField(this.value)">
+          <option value="Treasury">Treasury</option>
+          <option value="Member">Member</option>
+        </select>
+      </div>
+      <div id="member-paid-field" class="form-group hidden">
+        <label>Paying Member</label>
+        <select name="paidByMemberId" class="select-input">
+          <option value="">Select member...</option>
+          ${activeMembers.map(m => `<option value="${m.memberId}">${m.displayName}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Mark as Paid</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Mark Expense Paid', content);
+}
+
+async function handleMarkExpensePaid(event, expenseId) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    expenseId: expenseId,
+    amount: parseFloat(form.amount.value),
+    operationDate: form.operationDate.value,
+    paidBy: form.paidBy.value,
+    paidByMemberId: form.paidByMemberId?.value || ''
+  };
+
+  try {
+    await apiCall('markPlannedExpensePaid', data);
+    showToast('Expense marked as paid', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Add Adjustment Modal
+// ============================================
+function showAddAdjustmentModal() {
+  const content = `
+    <form id="add-adjustment-form" onsubmit="handleAddAdjustment(event)">
+      <div class="form-group">
+        <label>Entity Type *</label>
+        <select name="entityType" class="select-input" required>
+          <option value="Payment">Payment</option>
+          <option value="Expense">Expense</option>
+          <option value="Due">Due</option>
+          <option value="Settlement">Settlement</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Member (optional)</label>
+        <select name="memberId" class="select-input">
+          <option value="">No member</option>
+          ${state.members.map(m => `<option value="${m.memberId}">${m.displayName}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Amount (SAR) *</label>
+        <input type="number" name="amount" class="form-input" step="0.01" required>
+        <p class="help-text">Positive = increase debt/expense. Negative = credit/reduction.</p>
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="date" name="operationDate" class="form-input" value="${state.todayRiyadh}">
+      </div>
+      <div class="form-group">
+        <label>Reason *</label>
+        <input type="text" name="reason" class="form-input" required>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea name="notes" class="form-input" rows="2"></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Create Adjustment</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Add Adjustment', content);
+}
+
+async function handleAddAdjustment(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    entityType: form.entityType.value,
+    memberId: form.memberId.value,
+    amount: parseFloat(form.amount.value),
+    operationDate: form.operationDate.value,
+    reason: form.reason.value,
+    notes: form.notes.value
+  };
+
+  try {
+    await apiCall('createAdjustment', data);
+    showToast('Adjustment created successfully', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Add Settlement Modal
+// ============================================
+function showAddSettlementModal() {
+  const membersWithCredit = state.members.filter(m => m.effectiveBalance < 0);
+
+  const content = `
+    <form id="add-settlement-form" onsubmit="handleAddSettlement(event)">
+      <div class="form-group">
+        <label>Member *</label>
+        <select name="memberId" class="select-input" required>
+          <option value="">Select member with credit...</option>
+          ${membersWithCredit.map(m => `<option value="${m.memberId}">${m.displayName} (Credit: ${formatCurrency(Math.abs(m.effectiveBalance))})</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Amount (SAR) *</label>
+        <input type="number" name="amount" class="form-input" step="0.01" min="0.01" required>
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="date" name="operationDate" class="form-input" value="${state.todayRiyadh}">
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea name="notes" class="form-input" rows="2"></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Record Settlement</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Record Settlement', content);
+}
+
+async function handleAddSettlement(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    memberId: form.memberId.value,
+    amount: parseFloat(form.amount.value),
+    operationDate: form.operationDate.value,
+    notes: form.notes.value
+  };
+
+  try {
+    await apiCall('createSettlement', data);
+    showToast('Settlement recorded successfully', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Mark Member Left Modal
+// ============================================
+function showMarkLeftModal(memberId) {
+  const member = state.members.find(m => m.memberId === memberId);
+  if (!member) return;
+
+  const content = `
+    <form id="mark-left-form" onsubmit="handleMarkLeft(event, '${memberId}')">
+      <p class="mb-md">Mark <strong>${member.displayName}</strong> as left?</p>
+      <div class="form-group">
+        <label>End Cycle (last active cycle)</label>
+        <select name="endCycle" class="select-input">
+          ${state.cycles.map(c => `<option value="${c.cycleKey}" ${c.cycleKey === state.currentCycle?.cycleKey ? 'selected' : ''}>${c.cycleName}</option>`).join('')}
+        </select>
+      </div>
+      <p class="help-text">Current balance: ${formatCurrency(member.effectiveBalance)}</p>
+      ${member.effectiveBalance > 0 ? '<p class="help-text">Status will be "LeftOpenDebt" until balance is settled.</p>' : ''}
+      <div class="form-actions">
+        <button type="submit" class="btn btn-warning">Mark as Left</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Mark Member as Left', content);
+}
+
+async function handleMarkLeft(event, memberId) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    memberId: memberId,
+    endCycle: form.endCycle.value
+  };
+
+  try {
+    await apiCall('markMemberLeft', data);
+    showToast('Member marked as left', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Member Ledger Modal
+// ============================================
+async function viewMemberLedger(memberId) {
+  try {
+    const data = await apiCall('getMemberLedger', { memberId });
+    const { member, ledger, currentBalance } = data;
+
+    let tableRows = '';
+    ledger.forEach(entry => {
+      tableRows += `
+        <tr>
+          <td>${formatDate(entry.date)}</td>
+          <td>${entry.type}</td>
+          <td>${escapeHtml(entry.description)}</td>
+          <td class="number">${entry.debit ? formatCurrency(entry.debit) : '-'}</td>
+          <td class="number">${entry.credit ? formatCurrency(entry.credit) : '-'}</td>
+          <td class="number ${entry.balance > 0 ? 'negative' : 'positive'}">${formatCurrency(entry.balance)}</td>
+        </tr>
+      `;
+    });
+
+    const content = `
+      <p class="mb-md"><strong>Current Balance:</strong> <span class="${currentBalance > 0 ? 'negative' : 'positive'}">${formatCurrency(currentBalance)}</span></p>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Type</th>
+              <th>Description</th>
+              <th class="number">Debit</th>
+              <th class="number">Credit</th>
+              <th class="number">Balance</th>
+            </tr>
+          </thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    `;
+    showModal(`Ledger: ${member.displayName}`, content);
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Recurring Expenses Modal
+// ============================================
+async function showRecurringExpensesModal() {
+  try {
+    const data = await apiCall('getRecurringExpenses');
+    const { recurringExpenses } = data;
+
+    let tableRows = '';
+    recurringExpenses.forEach(r => {
+      tableRows += `
+        <tr>
+          <td>${escapeHtml(r.category)}</td>
+          <td>${escapeHtml(r.description)}</td>
+          <td>${r.type}</td>
+          <td class="number">${r.type === 'Fixed' ? formatCurrency(r.defaultAmount) : 'Variable'}</td>
+          <td>${r.isActive ? 'Active' : 'Inactive'}</td>
+        </tr>
+      `;
+    });
+
+    const content = `
+      <div class="table-container mb-md">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Description</th>
+              <th>Type</th>
+              <th class="number">Amount</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${tableRows || '<tr><td colspan="5" class="text-center">No recurring expenses</td></tr>'}</tbody>
+        </table>
+      </div>
+      <button class="btn btn-primary" onclick="showAddRecurringExpenseModal()">Add Recurring Expense</button>
+    `;
+    showModal('Recurring Expenses', content);
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+function showAddRecurringExpenseModal() {
+  const content = `
+    <form id="add-recurring-form" onsubmit="handleAddRecurringExpense(event)">
+      <div class="form-group">
+        <label>Category *</label>
+        <select name="category" class="select-input" required>
+          ${state.categories.map(c => `<option value="${c.categoryName}">${c.categoryName}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Description *</label>
+        <input type="text" name="description" class="form-input" required>
+      </div>
+      <div class="form-group">
+        <label>Type *</label>
+        <select name="type" class="select-input" required onchange="toggleDefaultAmountField(this.value)">
+          <option value="Fixed">Fixed</option>
+          <option value="Variable">Variable</option>
+        </select>
+      </div>
+      <div id="default-amount-field" class="form-group">
+        <label>Default Amount (SAR)</label>
+        <input type="number" name="defaultAmount" class="form-input" step="0.01" min="0.01">
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Add</button>
+        <button type="button" class="btn btn-secondary" onclick="showRecurringExpensesModal()">Back</button>
+      </div>
+    </form>
+  `;
+  showModal('Add Recurring Expense', content);
+}
+
+function toggleDefaultAmountField(type) {
+  const field = document.getElementById('default-amount-field');
+  field.classList.toggle('hidden', type === 'Variable');
+}
+
+async function handleAddRecurringExpense(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    category: form.category.value,
+    description: form.description.value,
+    type: form.type.value,
+    defaultAmount: form.type.value === 'Fixed' ? parseFloat(form.defaultAmount.value) : null
+  };
+
+  try {
+    await apiCall('createRecurringExpense', data);
+    showToast('Recurring expense added', 'success');
+    showRecurringExpensesModal();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Settings Actions
+// ============================================
+function showAddBankModal() {
+  const content = `
+    <form id="add-bank-form" onsubmit="handleAddBank(event)">
+      <div class="form-group">
+        <label>Bank Name *</label>
+        <input type="text" name="bankName" class="form-input" required>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Add Bank</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Add Bank', content);
+}
+
+async function handleAddBank(event) {
+  event.preventDefault();
+  const form = event.target;
+
+  try {
+    await apiCall('createBank', { bankName: form.bankName.value });
+    showToast('Bank added', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+function showAddCategoryModal() {
+  const content = `
+    <form id="add-category-form" onsubmit="handleAddCategory(event)">
+      <div class="form-group">
+        <label>Category Name *</label>
+        <input type="text" name="categoryName" class="form-input" required>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Add Category</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </form>
+  `;
+  showModal('Add Category', content);
+}
+
+async function handleAddCategory(event) {
+  event.preventDefault();
+  const form = event.target;
+
+  try {
+    await apiCall('createCategory', { categoryName: form.categoryName.value });
+    showToast('Category added', 'success');
+    closeModal();
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+async function setCycleOverride() {
+  const cycleKey = document.getElementById('override-cycle-select').value;
+  const amount = parseFloat(document.getElementById('override-amount').value);
+
+  if (!cycleKey) {
+    showToast('Please select a cycle', 'warning');
+    return;
+  }
+
+  if (!amount || amount <= 0) {
+    showToast('Please enter a valid amount', 'warning');
+    return;
+  }
+
+  try {
+    await apiCall('setCycleOverride', { cycleKey, dueAmountOverride: amount });
+    showToast('Cycle override set successfully', 'success');
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+async function closeCycleManual() {
+  if (!confirm('Are you sure you want to close the previous cycle?')) return;
+
+  try {
+    // Find the cycle before current
+    const sortedCycles = state.cycles.slice().sort((a, b) => b.cycleKey.localeCompare(a.cycleKey));
+    const openCycle = sortedCycles.find(c => c.status === 'Open' && c.cycleKey !== state.currentCycle?.cycleKey);
+
+    if (!openCycle) {
+      showToast('No cycle to close', 'info');
+      return;
+    }
+
+    await apiCall('closeCycle', { cycleKey: openCycle.cycleKey });
+    showToast('Cycle closed successfully', 'success');
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+async function initializeSystem() {
+  if (!confirm('This will initialize/repair the system. Continue?')) return;
+
+  try {
+    await apiCall('initializeSystem');
+    showToast('System initialized successfully', 'success');
+    await loadAllData();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Export Functions
+// ============================================
+async function exportExcel() {
+  const startCycle = document.getElementById('report-start-cycle').value;
+  const endCycle = document.getElementById('report-end-cycle').value;
+
+  try {
+    const snapshot = await apiCall('getSnapshot', { startCycle, endCycle });
+
+    const wb = XLSX.utils.book_new();
+
+    // Summary sheet
+    const summaryData = [
+      ['Majlis Fund Report'],
+      ['Period', `${getCycleNameFromKey(startCycle)} - ${getCycleNameFromKey(endCycle)}`],
+      ['Generated', new Date().toISOString()],
+      [],
+      ['Summary'],
+      ['Treasury Cash Balance', snapshot.summary.treasuryCashBalance],
+      ['Net Cash Flow', snapshot.summary.netCashFlow],
+      ['Total Expenses', snapshot.summary.totalExpenses],
+      ['Treasury Cash Expenses', snapshot.summary.treasuryCashExpenses],
+      ['Total Outstanding', snapshot.summary.totalOutstanding],
+      ['Total Credits', snapshot.summary.totalCredits]
+    ];
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+    XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+
+    // Dues sheet
+    const duesData = [['Cycle', 'Member', 'Amount', 'Generated At']];
+    snapshot.dues.forEach(d => {
+      duesData.push([d.cycleName, d.memberName, d.amount, d.generatedAt]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(duesData), 'Dues');
+
+    // Payments sheet
+    const paymentsData = [['Date', 'Cycle', 'Member', 'Amount', 'Method', 'Bank', 'Notes']];
+    snapshot.payments.forEach(p => {
+      paymentsData.push([p.operationDate, p.cycleName, p.memberName, p.amount, p.method, p.bankName, p.notes]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(paymentsData), 'Payments');
+
+    // Expenses sheet
+    const expensesData = [['Date', 'Cycle', 'Category', 'Description', 'Amount', 'Paid By', 'Notes']];
+    snapshot.expenses.filter(e => !e.isPlanned).forEach(e => {
+      expensesData.push([e.operationDate, e.cycleName, e.category, e.description, e.amount,
+        e.paidBy + (e.paidByMemberName ? ` (${e.paidByMemberName})` : ''), e.notes]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expensesData), 'Expenses');
+
+    // Adjustments sheet
+    const adjData = [['Date', 'Cycle', 'Type', 'Member', 'Amount', 'Reason']];
+    snapshot.adjustments.forEach(a => {
+      adjData.push([a.operationDate, a.cycleName, a.entityType, a.memberName, a.amount, a.reason]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(adjData), 'Adjustments');
+
+    // Settlements sheet
+    const settleData = [['Date', 'Cycle', 'Member', 'Amount', 'Notes']];
+    snapshot.settlements.forEach(s => {
+      settleData.push([s.operationDate, s.cycleName, s.memberName, s.amount, s.notes]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(settleData), 'Settlements');
+
+    // Download
+    XLSX.writeFile(wb, `majlis_fund_report_${startCycle}_${endCycle}.xlsx`);
+    showToast('Excel exported successfully', 'success');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+async function exportPDF() {
+  const startCycle = document.getElementById('report-start-cycle').value;
+  const endCycle = document.getElementById('report-end-cycle').value;
+
+  try {
+    const snapshot = await apiCall('getSnapshot', { startCycle, endCycle });
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    // Title
+    doc.setFontSize(18);
+    doc.text('Majlis Fund Report', 14, 20);
+
+    doc.setFontSize(10);
+    doc.text(`Period: ${getCycleNameFromKey(startCycle)} - ${getCycleNameFromKey(endCycle)}`, 14, 28);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 34);
+
+    // Summary
+    doc.setFontSize(14);
+    doc.text('Summary', 14, 46);
+
+    doc.setFontSize(10);
+    const summaryY = 54;
+    doc.text(`Treasury Cash Balance: ${formatCurrency(snapshot.summary.treasuryCashBalance)} SAR`, 14, summaryY);
+    doc.text(`Net Cash Flow: ${formatCurrency(snapshot.summary.netCashFlow)} SAR`, 14, summaryY + 6);
+    doc.text(`Total Expenses: ${formatCurrency(snapshot.summary.totalExpenses)} SAR`, 14, summaryY + 12);
+    doc.text(`Total Outstanding: ${formatCurrency(snapshot.summary.totalOutstanding)} SAR`, 14, summaryY + 18);
+    doc.text(`Total Credits: ${formatCurrency(snapshot.summary.totalCredits)} SAR`, 14, summaryY + 24);
+
+    // Member Balances Table
+    doc.setFontSize(14);
+    doc.text('Member Balances', 14, summaryY + 38);
+
+    const tableData = snapshot.memberBalances.map(m => [
+      m.displayName,
+      m.status,
+      formatCurrency(m.totalDues),
+      formatCurrency(m.totalPayments),
+      formatCurrency(m.effectiveBalance)
+    ]);
+
+    doc.autoTable({
+      startY: summaryY + 44,
+      head: [['Member', 'Status', 'Dues', 'Payments', 'Balance']],
+      body: tableData,
+      theme: 'striped',
+      headStyles: { fillColor: [37, 99, 235] }
+    });
+
+    // Save
+    doc.save(`majlis_fund_report_${startCycle}_${endCycle}.pdf`);
+    showToast('PDF exported successfully', 'success');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ============================================
+// Utility Functions
+// ============================================
+function formatCurrency(amount) {
+  if (amount === null || amount === undefined || isNaN(amount)) return '0.00';
+  return parseFloat(amount).toFixed(2);
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.remove();
+  }, 4000);
+}
+</script>

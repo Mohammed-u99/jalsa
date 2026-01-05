@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Majlis Fund System</title>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- CDN Libraries -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.1/jspdf.plugin.autotable.min.js"></script>
+
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div id="app">
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+      <div class="loader"></div>
+      <p>Loading Majlis Fund System...</p>
+    </div>
+
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <h1 class="logo">Majlis Fund</h1>
+        <div class="header-info">
+          <span id="current-cycle" class="cycle-badge"></span>
+          <span id="today-date" class="date-display"></span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Navigation -->
+    <nav class="nav">
+      <div class="nav-content">
+        <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+        <button class="nav-btn" data-view="members">Members</button>
+        <button class="nav-btn" data-view="payments">Payments</button>
+        <button class="nav-btn" data-view="expenses">Expenses</button>
+        <button class="nav-btn" data-view="adjustments">Adjustments</button>
+        <button class="nav-btn" data-view="reports">Reports</button>
+        <button class="nav-btn" data-view="settings">Settings</button>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Dashboard View -->
+      <div id="view-dashboard" class="view active">
+        <div class="view-header">
+          <h2>Dashboard</h2>
+          <div class="view-actions">
+            <select id="dashboard-cycle-filter" class="select-input">
+              <option value="">All Cycles</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="summary-cards">
+          <div class="card summary-card">
+            <div class="card-icon treasury">SAR</div>
+            <div class="card-content">
+              <h3>Treasury Cash</h3>
+              <p class="card-value" id="treasury-balance">0.00</p>
+            </div>
+          </div>
+          <div class="card summary-card">
+            <div class="card-icon flow">+/-</div>
+            <div class="card-content">
+              <h3>Net Cash Flow</h3>
+              <p class="card-value" id="net-cash-flow">0.00</p>
+            </div>
+          </div>
+          <div class="card summary-card">
+            <div class="card-icon outstanding">!</div>
+            <div class="card-content">
+              <h3>Outstanding</h3>
+              <p class="card-value" id="total-outstanding">0.00</p>
+            </div>
+          </div>
+          <div class="card summary-card">
+            <div class="card-icon credit">+</div>
+            <div class="card-content">
+              <h3>Member Credits</h3>
+              <p class="card-value" id="total-credits">0.00</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Alerts Section -->
+        <div id="alerts-section" class="alerts-section hidden">
+          <h3>Alerts</h3>
+          <div id="alerts-container"></div>
+        </div>
+
+        <!-- Member Balances Table -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Member Balances</h3>
+            <input type="text" id="member-search" class="search-input" placeholder="Search members...">
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="member-balances-table">
+              <thead>
+                <tr>
+                  <th data-sort="displayName">Member</th>
+                  <th data-sort="status">Status</th>
+                  <th data-sort="totalDues" class="number">Dues</th>
+                  <th data-sort="totalPayments" class="number">Payments</th>
+                  <th data-sort="activeCredit" class="number">Credit</th>
+                  <th data-sort="effectiveBalance" class="number">Balance</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Recent Transactions -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Recent Transactions</h3>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="recent-transactions-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Member</th>
+                  <th>Description</th>
+                  <th class="number">Amount</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Members View -->
+      <div id="view-members" class="view">
+        <div class="view-header">
+          <h2>Members</h2>
+          <div class="view-actions">
+            <button class="btn btn-primary" onclick="showAddMemberModal()">Add Member</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>All Members</h3>
+            <div class="filter-group">
+              <select id="member-status-filter" class="select-input">
+                <option value="">All Status</option>
+                <option value="Active">Active</option>
+                <option value="LeftOpenDebt">Left with Debt</option>
+                <option value="Closed">Closed</option>
+              </select>
+              <input type="text" id="members-search" class="search-input" placeholder="Search...">
+            </div>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="members-table">
+              <thead>
+                <tr>
+                  <th data-sort="displayName">Name</th>
+                  <th data-sort="startCycle">Start Cycle</th>
+                  <th data-sort="endCycle">End Cycle</th>
+                  <th data-sort="status">Status</th>
+                  <th data-sort="effectiveBalance" class="number">Balance</th>
+                  <th>Contact</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Payments View -->
+      <div id="view-payments" class="view">
+        <div class="view-header">
+          <h2>Payments</h2>
+          <div class="view-actions">
+            <button class="btn btn-primary" onclick="showAddPaymentModal()">Record Payment</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>Payment History</h3>
+            <div class="filter-group">
+              <select id="payment-cycle-filter" class="select-input">
+                <option value="">All Cycles</option>
+              </select>
+              <select id="payment-member-filter" class="select-input">
+                <option value="">All Members</option>
+              </select>
+              <input type="text" id="payments-search" class="search-input" placeholder="Search...">
+            </div>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="payments-table">
+              <thead>
+                <tr>
+                  <th data-sort="operationDate">Date</th>
+                  <th data-sort="cycleName">Cycle</th>
+                  <th data-sort="memberName">Member</th>
+                  <th data-sort="amount" class="number">Amount</th>
+                  <th data-sort="method">Method</th>
+                  <th>Bank/Notes</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Expenses View -->
+      <div id="view-expenses" class="view">
+        <div class="view-header">
+          <h2>Expenses</h2>
+          <div class="view-actions">
+            <button class="btn btn-primary" onclick="showAddExpenseModal()">Add Expense</button>
+            <button class="btn btn-secondary" onclick="showRecurringExpensesModal()">Recurring</button>
+          </div>
+        </div>
+
+        <!-- Planned Expenses -->
+        <div class="card" id="planned-expenses-card">
+          <div class="card-header">
+            <h3>Planned Expenses</h3>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="planned-expenses-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Description</th>
+                  <th class="number">Amount</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- All Expenses -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Expense History</h3>
+            <div class="filter-group">
+              <select id="expense-cycle-filter" class="select-input">
+                <option value="">All Cycles</option>
+              </select>
+              <select id="expense-category-filter" class="select-input">
+                <option value="">All Categories</option>
+              </select>
+              <input type="text" id="expenses-search" class="search-input" placeholder="Search...">
+            </div>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="expenses-table">
+              <thead>
+                <tr>
+                  <th data-sort="operationDate">Date</th>
+                  <th data-sort="cycleName">Cycle</th>
+                  <th data-sort="category">Category</th>
+                  <th>Description</th>
+                  <th data-sort="amount" class="number">Amount</th>
+                  <th data-sort="paidBy">Paid By</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Adjustments View -->
+      <div id="view-adjustments" class="view">
+        <div class="view-header">
+          <h2>Adjustments & Settlements</h2>
+          <div class="view-actions">
+            <button class="btn btn-primary" onclick="showAddAdjustmentModal()">Add Adjustment</button>
+            <button class="btn btn-secondary" onclick="showAddSettlementModal()">Add Settlement</button>
+          </div>
+        </div>
+
+        <!-- Adjustments -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Adjustments</h3>
+            <div class="filter-group">
+              <select id="adjustment-cycle-filter" class="select-input">
+                <option value="">All Cycles</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="adjustments-table">
+              <thead>
+                <tr>
+                  <th data-sort="operationDate">Date</th>
+                  <th data-sort="cycleName">Cycle</th>
+                  <th data-sort="entityType">Type</th>
+                  <th data-sort="memberName">Member</th>
+                  <th data-sort="amount" class="number">Amount</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Settlements -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Settlements</h3>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="settlements-table">
+              <thead>
+                <tr>
+                  <th data-sort="operationDate">Date</th>
+                  <th data-sort="cycleName">Cycle</th>
+                  <th data-sort="memberName">Member</th>
+                  <th data-sort="amount" class="number">Amount</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Reports View -->
+      <div id="view-reports" class="view">
+        <div class="view-header">
+          <h2>Reports</h2>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>Generate Report</h3>
+          </div>
+          <div class="card-body">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Start Cycle</label>
+                <select id="report-start-cycle" class="select-input"></select>
+              </div>
+              <div class="form-group">
+                <label>End Cycle</label>
+                <select id="report-end-cycle" class="select-input"></select>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" onclick="exportExcel()">Export Excel</button>
+              <button class="btn btn-secondary" onclick="exportPDF()">Export PDF</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cycle Summary -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Cycle Summary</h3>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="cycle-summary-table">
+              <thead>
+                <tr>
+                  <th>Cycle</th>
+                  <th>Status</th>
+                  <th class="number">Total Dues</th>
+                  <th class="number">Total Payments</th>
+                  <th class="number">Total Expenses</th>
+                  <th class="number">Net Flow</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings View -->
+      <div id="view-settings" class="view">
+        <div class="view-header">
+          <h2>Settings</h2>
+        </div>
+
+        <div class="settings-grid">
+          <!-- System Info -->
+          <div class="card">
+            <div class="card-header">
+              <h3>System Information</h3>
+            </div>
+            <div class="card-body">
+              <div class="info-row">
+                <span>Schema Version:</span>
+                <span id="schema-version">-</span>
+              </div>
+              <div class="info-row">
+                <span>System Start:</span>
+                <span id="system-start">-</span>
+              </div>
+              <div class="info-row">
+                <span>Timezone:</span>
+                <span id="timezone">-</span>
+              </div>
+              <div class="info-row">
+                <span>Default Due Amount:</span>
+                <span id="default-due">-</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Banks -->
+          <div class="card">
+            <div class="card-header">
+              <h3>Banks</h3>
+              <button class="btn btn-sm btn-primary" onclick="showAddBankModal()">Add</button>
+            </div>
+            <div class="card-body">
+              <ul id="banks-list" class="tag-list"></ul>
+            </div>
+          </div>
+
+          <!-- Categories -->
+          <div class="card">
+            <div class="card-header">
+              <h3>Expense Categories</h3>
+              <button class="btn btn-sm btn-primary" onclick="showAddCategoryModal()">Add</button>
+            </div>
+            <div class="card-body">
+              <ul id="categories-list" class="tag-list"></ul>
+            </div>
+          </div>
+
+          <!-- Cycle Management -->
+          <div class="card">
+            <div class="card-header">
+              <h3>Cycle Management</h3>
+            </div>
+            <div class="card-body">
+              <div class="info-row">
+                <span>Current Cycle:</span>
+                <span id="current-cycle-name">-</span>
+              </div>
+              <div class="info-row">
+                <span>Cycle Status:</span>
+                <span id="current-cycle-status">-</span>
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-warning" id="close-cycle-btn" onclick="closeCycleManual()" disabled>
+                  Close Previous Cycle
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Override Due Amount -->
+          <div class="card">
+            <div class="card-header">
+              <h3>Cycle Due Override</h3>
+            </div>
+            <div class="card-body">
+              <div class="form-group">
+                <label>Select Future Cycle</label>
+                <select id="override-cycle-select" class="select-input"></select>
+              </div>
+              <div class="form-group">
+                <label>Override Amount (SAR)</label>
+                <input type="number" id="override-amount" class="form-input" step="0.01" min="0">
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-primary" onclick="setCycleOverride()">Set Override</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Initialize System -->
+          <div class="card">
+            <div class="card-header">
+              <h3>System Actions</h3>
+            </div>
+            <div class="card-body">
+              <button class="btn btn-secondary" onclick="initializeSystem()">
+                Initialize / Repair System
+              </button>
+              <p class="help-text">Creates missing sheets, defaults, and ensures cycles are current.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Modal Container -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+      <div id="modal" class="modal">
+        <div class="modal-header">
+          <h3 id="modal-title">Modal Title</h3>
+          <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div id="modal-content" class="modal-content"></div>
+      </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+  </div>
+
+  <?!= include('App'); ?>
+</body>
+</html>
