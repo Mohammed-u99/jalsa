@@ -38,6 +38,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Hide loading overlay
     document.getElementById('loading-overlay').classList.add('hidden');
   } catch (error) {
+    // Hide loading overlay
+    document.getElementById('loading-overlay').classList.add('hidden');
     showToast('Error initializing: ' + error.message, 'error');
     console.error(error);
   }
@@ -92,16 +94,22 @@ function callApi(action, data = {}) {
   return new Promise((resolve, reject) => {
     google.script.run
       .withSuccessHandler(response => {
-        if (response.success) {
-          resolve(response.data);
-        } else {
-          reject(new Error(response.error || 'Unknown error'));
-        }
-      })
+  if (!response) {
+    reject(new Error('Server returned null/empty response'));
+    return;
+  }
+  if (response.success) {
+    resolve(response.data);
+  } else {
+    reject(new Error(response.error || 'Unknown error'));
+  }
+})
+
       .withFailureHandler(error => {
         reject(new Error(error.message || 'API call failed'));
       })
-      .doPost({ postData: { contents: JSON.stringify({ action, data }) } });
+      .rpc(action, data);
+
   });
 }
 
