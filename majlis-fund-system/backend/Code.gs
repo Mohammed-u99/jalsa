@@ -13,7 +13,7 @@
 // ============================================================================
 
 const CONFIG = {
-  SPREADSHEET_ID: '1O1AXqfryw4NFg0aI4L_AMAIM7KF7R0yYkkAMaLNu-3Y', // Set this to your Google Sheet ID
+  SPREADSHEET_ID: '', // Set this to your Google Sheet ID
   SCHEMA_VERSION: '1.0.0',
   TIMEZONE: 'Asia/Riyadh',
   DEFAULT_DUE_AMOUNT: 150,
