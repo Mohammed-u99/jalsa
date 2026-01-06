@@ -13,7 +13,7 @@
 // ============================================================================
 
 const CONFIG = {
-  SPREADSHEET_ID: '', // Set this to your Google Sheet ID
+  SPREADSHEET_ID: '1O1AXqfryw4NFg0aI4L_AMAIM7KF7R0yYkkAMaLNu-3Y', // Set this to your Google Sheet ID
   SCHEMA_VERSION: '1.0.0',
   TIMEZONE: 'Asia/Riyadh',
   DEFAULT_DUE_AMOUNT: 150,
@@ -470,23 +470,37 @@ function acquireLock_() {
  * Converts sheet data to array of objects
  */
 function sheetDataToObjects_(sheet) {
-  const data = sheet.getDataRange().getValues();
-  if (data.length < 2) return [];
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const display = range.getDisplayValues(); // مهم: يرجّع النص الظاهر في الشيت
 
-  const headers = data[0];
+  if (values.length < 2) return [];
+
+  const headers = values[0].map(h => String(h).trim());
   const objects = [];
 
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
     const obj = {};
+
     for (let j = 0; j < headers.length; j++) {
-      obj[headers[j]] = row[j];
+      const header = headers[j];
+      const v = row[j];
+
+      // إذا الشيت مخزنها كـ Date، خذ النص الظاهر بدل الـ Date object
+      if (v instanceof Date) {
+        obj[header] = display[i][j];
+      } else {
+        obj[header] = v;
+      }
     }
+
     objects.push(obj);
   }
 
   return objects;
 }
+
 
 /**
  * Appends a row to a sheet
