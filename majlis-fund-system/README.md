@@ -62,6 +62,8 @@ Create the following files in the Apps Script editor (click the `+` next to File
 
 **Settings.gs** - Copy the contents from `backend/Settings.gs`
 
+**Rpc.gs** - Copy the contents from `backend/Rpc.gs` (helper wrapper to call the webapp router from other backend code)
+
 ### Step 4: Add Frontend Files
 
 Create the following files (click the `+` next to Files and select "HTML"):
