@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>صندوق التكافل</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <!-- شريط التنقل العلوي -->
+  <header class="app-header">
+    <div class="header-content">
+      <h1 class="app-title">صندوق التكافل</h1>
+      <nav class="main-nav">
+        <button class="nav-btn active" data-view="dashboard">لوحة التحكم</button>
+        <button class="nav-btn" data-view="members">الأعضاء</button>
+        <button class="nav-btn" data-view="contributions">المساهمات</button>
+        <button class="nav-btn" data-view="expenses">المصروفات</button>
+        <button class="nav-btn" data-view="adjustments">التعديلات</button>
+        <button class="nav-btn" data-view="reports">التقارير</button>
+        <button class="nav-btn" data-view="settings">الإعدادات</button>
+      </nav>
+      <button class="nav-toggle" id="nav-toggle">☰</button>
+    </div>
+  </header>
+
+  <!-- المحتوى الرئيسي -->
+  <main class="app-main">
+    <!-- إشعارات -->
+    <div id="toast-container"></div>
+
+    <!-- شاشة التحميل -->
+    <div id="loading-overlay" class="loading-overlay">
+      <div class="spinner"></div>
+      <p>جاري التحميل...</p>
+    </div>
+
+    <!-- ===== لوحة التحكم ===== -->
+    <section id="view-dashboard" class="view active">
+      <h2>لوحة التحكم</h2>
+
+      <div class="summary-cards">
+        <div class="card card-primary">
+          <div class="card-icon">💰</div>
+          <div class="card-body">
+            <div class="card-label">رصيد الصندوق</div>
+            <div class="card-value" id="dash-treasury-balance">0</div>
+            <div class="card-unit">ريال</div>
+          </div>
+        </div>
+        <div class="card card-success">
+          <div class="card-icon">📥</div>
+          <div class="card-body">
+            <div class="card-label">إجمالي المساهمات</div>
+            <div class="card-value" id="dash-total-contributions">0</div>
+            <div class="card-unit">ريال</div>
+          </div>
+        </div>
+        <div class="card card-warning">
+          <div class="card-icon">📤</div>
+          <div class="card-body">
+            <div class="card-label">إجمالي المصروفات</div>
+            <div class="card-value" id="dash-total-expenses">0</div>
+            <div class="card-unit">ريال</div>
+          </div>
+        </div>
+        <div class="card card-info">
+          <div class="card-icon">👥</div>
+          <div class="card-body">
+            <div class="card-label">عدد الأعضاء النشطين</div>
+            <div class="card-value" id="dash-active-members">0</div>
+            <div class="card-unit">عضو</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dashboard-grid">
+        <div class="panel">
+          <h3>ملخص أرصدة الأعضاء</h3>
+          <div class="table-wrapper">
+            <table id="dash-member-balances">
+              <thead>
+                <tr>
+                  <th>العضو</th>
+                  <th>إجمالي المساهمات</th>
+                  <th>عدد المساهمات</th>
+                  <th>آخر مساهمة</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>آخر المعاملات</h3>
+          <div class="table-wrapper">
+            <table id="dash-recent-transactions">
+              <thead>
+                <tr>
+                  <th>التاريخ</th>
+                  <th>النوع</th>
+                  <th>التفاصيل</th>
+                  <th>المبلغ</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== الأعضاء ===== -->
+    <section id="view-members" class="view">
+      <div class="view-header">
+        <h2>الأعضاء</h2>
+        <button class="btn btn-primary" onclick="showMemberForm()">+ إضافة عضو</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table id="members-table">
+          <thead>
+            <tr>
+              <th>الاسم</th>
+              <th>تاريخ الانضمام</th>
+              <th>الحالة</th>
+              <th>إجمالي المساهمات</th>
+              <th>آخر مساهمة</th>
+              <th>الإجراءات</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- نموذج إضافة/تعديل عضو -->
+      <div id="member-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 id="member-modal-title">إضافة عضو جديد</h3>
+            <button class="modal-close" onclick="closeMemberForm()">&times;</button>
+          </div>
+          <form id="member-form" onsubmit="submitMemberForm(event)">
+            <input type="hidden" id="member-form-id">
+            <div class="form-group">
+              <label for="member-form-name">اسم العضو *</label>
+              <input type="text" id="member-form-name" required placeholder="أدخل اسم العضو">
+            </div>
+            <div class="form-group">
+              <label for="member-form-joindate">تاريخ الانضمام</label>
+              <input type="date" id="member-form-joindate">
+            </div>
+            <div class="form-group">
+              <label for="member-form-phone">رقم الهاتف</label>
+              <input type="tel" id="member-form-phone" placeholder="05xxxxxxxx">
+            </div>
+            <div class="form-group">
+              <label for="member-form-email">البريد الإلكتروني</label>
+              <input type="email" id="member-form-email" placeholder="example@email.com">
+            </div>
+            <div class="form-group">
+              <label for="member-form-notes">ملاحظات</label>
+              <textarea id="member-form-notes" rows="3" placeholder="ملاحظات إضافية..."></textarea>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">حفظ</button>
+              <button type="button" class="btn btn-secondary" onclick="closeMemberForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== المساهمات ===== -->
+    <section id="view-contributions" class="view">
+      <div class="view-header">
+        <h2>المساهمات</h2>
+        <button class="btn btn-primary" onclick="showContributionForm()">+ تسجيل مساهمة</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table id="contributions-table">
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>العضو</th>
+              <th>المبلغ</th>
+              <th>طريقة الدفع</th>
+              <th>ملاحظات</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- نموذج تسجيل مساهمة -->
+      <div id="contribution-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>تسجيل مساهمة جديدة</h3>
+            <button class="modal-close" onclick="closeContributionForm()">&times;</button>
+          </div>
+          <form id="contribution-form" onsubmit="submitContributionForm(event)">
+            <div class="form-group">
+              <label for="contrib-member">العضو *</label>
+              <select id="contrib-member" required>
+                <option value="">اختر العضو...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="contrib-date">التاريخ *</label>
+              <input type="date" id="contrib-date" required>
+            </div>
+            <div class="form-group">
+              <label for="contrib-amount">المبلغ (ريال) *</label>
+              <input type="number" id="contrib-amount" required min="0.01" step="0.01" placeholder="أدخل المبلغ">
+            </div>
+            <div class="form-group">
+              <label for="contrib-method">طريقة الدفع *</label>
+              <select id="contrib-method" onchange="toggleBankField()">
+                <option value="نقدي">نقدي</option>
+                <option value="تحويل بنكي">تحويل بنكي</option>
+              </select>
+            </div>
+            <div class="form-group" id="contrib-bank-group" style="display:none;">
+              <label for="contrib-bank">البنك *</label>
+              <select id="contrib-bank">
+                <option value="">اختر البنك...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="contrib-notes">ملاحظات</label>
+              <textarea id="contrib-notes" rows="2" placeholder="ملاحظات إضافية..."></textarea>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">تسجيل المساهمة</button>
+              <button type="button" class="btn btn-secondary" onclick="closeContributionForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== المصروفات ===== -->
+    <section id="view-expenses" class="view">
+      <div class="view-header">
+        <h2>المصروفات</h2>
+        <button class="btn btn-primary" onclick="showExpenseForm()">+ تسجيل مصروف</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table id="expenses-table">
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>الفئة</th>
+              <th>الوصف</th>
+              <th>المبلغ</th>
+              <th>الدافع</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- نموذج تسجيل مصروف -->
+      <div id="expense-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>تسجيل مصروف جديد</h3>
+            <button class="modal-close" onclick="closeExpenseForm()">&times;</button>
+          </div>
+          <form id="expense-form" onsubmit="submitExpenseForm(event)">
+            <div class="form-group">
+              <label for="expense-date">التاريخ *</label>
+              <input type="date" id="expense-date" required>
+            </div>
+            <div class="form-group">
+              <label for="expense-category">الفئة *</label>
+              <select id="expense-category" required>
+                <option value="">اختر الفئة...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="expense-description">الوصف</label>
+              <input type="text" id="expense-description" placeholder="وصف المصروف">
+            </div>
+            <div class="form-group">
+              <label for="expense-amount">المبلغ (ريال) *</label>
+              <input type="number" id="expense-amount" required min="0.01" step="0.01" placeholder="أدخل المبلغ">
+            </div>
+            <div class="form-group">
+              <label for="expense-paidby">الدافع *</label>
+              <select id="expense-paidby" onchange="toggleExpenseMemberField()">
+                <option value="الصندوق">الصندوق</option>
+                <option value="عضو">عضو</option>
+              </select>
+            </div>
+            <div class="form-group" id="expense-member-group" style="display:none;">
+              <label for="expense-member">العضو الدافع *</label>
+              <select id="expense-member">
+                <option value="">اختر العضو...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="expense-notes">ملاحظات</label>
+              <textarea id="expense-notes" rows="2" placeholder="ملاحظات إضافية..."></textarea>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">تسجيل المصروف</button>
+              <button type="button" class="btn btn-secondary" onclick="closeExpenseForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== التعديلات ===== -->
+    <section id="view-adjustments" class="view">
+      <div class="view-header">
+        <h2>التعديلات</h2>
+        <button class="btn btn-primary" onclick="showAdjustmentForm()">+ تسجيل تعديل</button>
+      </div>
+
+      <p class="view-description">التعديلات تستخدم لتصحيح الأخطاء أو إضافة/خصم مبالغ. المبلغ الموجب = إضافة، المبلغ السالب = خصم.</p>
+
+      <div class="table-wrapper">
+        <table id="adjustments-table">
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>النوع</th>
+              <th>العضو</th>
+              <th>المبلغ</th>
+              <th>السبب</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- نموذج تسجيل تعديل -->
+      <div id="adjustment-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>تسجيل تعديل جديد</h3>
+            <button class="modal-close" onclick="closeAdjustmentForm()">&times;</button>
+          </div>
+          <form id="adjustment-form" onsubmit="submitAdjustmentForm(event)">
+            <div class="form-group">
+              <label for="adj-date">التاريخ *</label>
+              <input type="date" id="adj-date" required>
+            </div>
+            <div class="form-group">
+              <label for="adj-type">نوع التعديل *</label>
+              <select id="adj-type">
+                <option value="عضو">تعديل على عضو</option>
+                <option value="صندوق">تعديل على الصندوق</option>
+              </select>
+            </div>
+            <div class="form-group" id="adj-member-group">
+              <label for="adj-member">العضو *</label>
+              <select id="adj-member">
+                <option value="">اختر العضو...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="adj-amount">المبلغ (ريال) *</label>
+              <input type="number" id="adj-amount" required step="0.01" placeholder="موجب للإضافة، سالب للخصم">
+              <small>أدخل مبلغاً موجباً للإضافة أو سالباً للخصم</small>
+            </div>
+            <div class="form-group">
+              <label for="adj-reason">السبب *</label>
+              <textarea id="adj-reason" rows="3" required placeholder="اشرح سبب التعديل..."></textarea>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">تسجيل التعديل</button>
+              <button type="button" class="btn btn-secondary" onclick="closeAdjustmentForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== التقارير ===== -->
+    <section id="view-reports" class="view">
+      <div class="view-header">
+        <h2>التقارير</h2>
+      </div>
+
+      <div class="report-filters">
+        <div class="form-group">
+          <label for="report-start-date">من تاريخ</label>
+          <input type="date" id="report-start-date">
+        </div>
+        <div class="form-group">
+          <label for="report-end-date">إلى تاريخ</label>
+          <input type="date" id="report-end-date">
+        </div>
+        <button class="btn btn-primary" onclick="generateReport()">عرض التقرير</button>
+      </div>
+
+      <div id="report-content" style="display:none;">
+        <div class="report-summary">
+          <div class="summary-cards">
+            <div class="card card-success">
+              <div class="card-body">
+                <div class="card-label">المساهمات في الفترة</div>
+                <div class="card-value" id="report-contributions-total">0</div>
+                <div class="card-unit">ريال</div>
+              </div>
+            </div>
+            <div class="card card-warning">
+              <div class="card-body">
+                <div class="card-label">المصروفات في الفترة</div>
+                <div class="card-value" id="report-expenses-total">0</div>
+                <div class="card-unit">ريال</div>
+              </div>
+            </div>
+            <div class="card card-info">
+              <div class="card-body">
+                <div class="card-label">صافي الفترة</div>
+                <div class="card-value" id="report-net">0</div>
+                <div class="card-unit">ريال</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>المصروفات حسب الفئة</h3>
+          <div class="table-wrapper">
+            <table id="report-expenses-by-category">
+              <thead>
+                <tr>
+                  <th>الفئة</th>
+                  <th>المبلغ</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>مساهمات الأعضاء</h3>
+          <div class="table-wrapper">
+            <table id="report-member-contributions">
+              <thead>
+                <tr>
+                  <th>العضو</th>
+                  <th>إجمالي المساهمات</th>
+                  <th>عدد المساهمات</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="report-actions">
+          <button class="btn btn-success" onclick="exportToExcel()">تصدير إلى Excel</button>
+          <button class="btn btn-info" onclick="exportToPdf()">تصدير إلى PDF</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== الإعدادات ===== -->
+    <section id="view-settings" class="view">
+      <h2>الإعدادات</h2>
+
+      <div class="panel">
+        <h3>تهيئة النظام</h3>
+        <p>اضغط على الزر أدناه لتهيئة النظام وإنشاء الأوراق المطلوبة في جدول البيانات.</p>
+        <button class="btn btn-primary" onclick="initializeSystem()">تهيئة / إصلاح النظام</button>
+        <div id="init-result" style="margin-top: 10px;"></div>
+      </div>
+
+      <div class="panel">
+        <h3>إعدادات الصندوق</h3>
+        <form id="settings-form" onsubmit="submitSettingsForm(event)">
+          <div class="form-group">
+            <label for="setting-fund-name">اسم الصندوق</label>
+            <input type="text" id="setting-fund-name" placeholder="صندوق التكافل">
+          </div>
+          <div class="form-group">
+            <label for="setting-opening-balance">الرصيد الافتتاحي (ريال)</label>
+            <input type="number" id="setting-opening-balance" step="0.01" placeholder="0">
+          </div>
+          <div class="form-group">
+            <label for="setting-currency">العملة</label>
+            <input type="text" id="setting-currency" placeholder="ريال">
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">حفظ الإعدادات</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="settings-grid">
+        <div class="panel">
+          <h3>البنوك</h3>
+          <form id="bank-form" onsubmit="submitBankForm(event)" class="inline-form">
+            <input type="text" id="bank-name-input" placeholder="اسم البنك" required>
+            <button type="submit" class="btn btn-primary">إضافة</button>
+          </form>
+          <ul id="banks-list" class="tag-list"></ul>
+        </div>
+
+        <div class="panel">
+          <h3>فئات المصروفات</h3>
+          <form id="category-form" onsubmit="submitCategoryForm(event)" class="inline-form">
+            <input type="text" id="category-name-input" placeholder="اسم الفئة" required>
+            <button type="submit" class="btn btn-primary">إضافة</button>
+          </form>
+          <ul id="categories-list" class="tag-list"></ul>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>سجل المراجعة</h3>
+        <div class="table-wrapper">
+          <table id="audit-log-table">
+            <thead>
+              <tr>
+                <th>الوقت</th>
+                <th>الإجراء</th>
+                <th>النوع</th>
+                <th>التفاصيل</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- نموذج تفاصيل العضو -->
+    <div id="member-detail-modal" class="modal" style="display:none;">
+      <div class="modal-content modal-lg">
+        <div class="modal-header">
+          <h3 id="member-detail-title">تفاصيل العضو</h3>
+          <button class="modal-close" onclick="closeMemberDetail()">&times;</button>
+        </div>
+        <div id="member-detail-content">
+          <div class="member-info-cards">
+            <div class="card card-success">
+              <div class="card-body">
+                <div class="card-label">إجمالي المساهمات</div>
+                <div class="card-value" id="detail-total-contributions">0</div>
+              </div>
+            </div>
+            <div class="card card-info">
+              <div class="card-body">
+                <div class="card-label">عدد المساهمات</div>
+                <div class="card-value" id="detail-contribution-count">0</div>
+              </div>
+            </div>
+            <div class="card card-primary">
+              <div class="card-body">
+                <div class="card-label">صافي الرصيد</div>
+                <div class="card-value" id="detail-net-balance">0</div>
+              </div>
+            </div>
+          </div>
+          <h4>سجل المعاملات</h4>
+          <div class="table-wrapper">
+            <table id="member-ledger-table">
+              <thead>
+                <tr>
+                  <th>التاريخ</th>
+                  <th>النوع</th>
+                  <th>الوصف</th>
+                  <th>المبلغ</th>
+                  <th>الرصيد التراكمي</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <?!= include('App'); ?>
+</body>
+</html>

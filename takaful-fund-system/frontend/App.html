@@ -1,0 +1,1063 @@
+<script>
+/**
+ * صندوق التكافل - تطبيق الواجهة الأمامية
+ * تطبيق صفحة واحدة (SPA) بالعربية بالكامل
+ */
+
+// ===== الحالة العامة =====
+const state = {
+  members: [],
+  contributions: [],
+  expenses: [],
+  adjustments: [],
+  settlements: [],
+  banks: [],
+  categories: [],
+  settings: {},
+  balances: [],
+  treasury: null,
+  currentView: 'dashboard'
+};
+
+// ===== التهيئة =====
+document.addEventListener('DOMContentLoaded', function() {
+  setupNavigation();
+  loadAllData();
+});
+
+function setupNavigation() {
+  // أزرار التنقل
+  document.querySelectorAll('.nav-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      navigateTo(btn.dataset.view);
+    });
+  });
+
+  // زر القائمة للجوال
+  const toggle = document.getElementById('nav-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function() {
+      document.querySelector('.main-nav').classList.toggle('open');
+    });
+  }
+
+  // إغلاق القائمة عند الضغط خارجها
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.main-nav') && !e.target.closest('.nav-toggle')) {
+      const nav = document.querySelector('.main-nav');
+      if (nav) nav.classList.remove('open');
+    }
+  });
+
+  // نوع التعديل
+  const adjType = document.getElementById('adj-type');
+  if (adjType) {
+    adjType.addEventListener('change', function() {
+      const memberGroup = document.getElementById('adj-member-group');
+      memberGroup.style.display = this.value === 'عضو' ? 'block' : 'none';
+    });
+  }
+}
+
+function navigateTo(viewName) {
+  // إخفاء كل الشاشات
+  document.querySelectorAll('.view').forEach(function(v) {
+    v.classList.remove('active');
+  });
+  document.querySelectorAll('.nav-btn').forEach(function(b) {
+    b.classList.remove('active');
+  });
+
+  // إظهار الشاشة المطلوبة
+  const view = document.getElementById('view-' + viewName);
+  if (view) view.classList.add('active');
+
+  const navBtn = document.querySelector('.nav-btn[data-view="' + viewName + '"]');
+  if (navBtn) navBtn.classList.add('active');
+
+  state.currentView = viewName;
+
+  // إغلاق القائمة المتنقلة
+  document.querySelector('.main-nav').classList.remove('open');
+
+  // تحديث البيانات حسب الشاشة
+  switch (viewName) {
+    case 'dashboard': renderDashboard(); break;
+    case 'members': renderMembers(); break;
+    case 'contributions': renderContributions(); break;
+    case 'expenses': renderExpenses(); break;
+    case 'adjustments': renderAdjustments(); break;
+    case 'settings': renderSettings(); break;
+  }
+}
+
+// ===== تحميل البيانات =====
+function loadAllData() {
+  showLoading();
+  let loaded = 0;
+  const total = 7;
+
+  function checkDone() {
+    loaded++;
+    if (loaded >= total) {
+      hideLoading();
+      renderDashboard();
+    }
+  }
+
+  callApi('getMembers', {}, function(data) { state.members = data || []; checkDone(); }, checkDone);
+  callApi('getContributions', {}, function(data) { state.contributions = data || []; checkDone(); }, checkDone);
+  callApi('getExpenses', {}, function(data) { state.expenses = data || []; checkDone(); }, checkDone);
+  callApi('getAdjustments', {}, function(data) { state.adjustments = data || []; checkDone(); }, checkDone);
+  callApi('getSettlements', {}, function(data) { state.settlements = data || []; checkDone(); }, checkDone);
+  callApi('getBanks', {}, function(data) { state.banks = data || []; checkDone(); }, checkDone);
+  callApi('getCategories', {}, function(data) { state.categories = data || []; checkDone(); }, checkDone);
+}
+
+// ===== استدعاء API =====
+function callApi(action, data, onSuccess, onError) {
+  google.script.run
+    .withSuccessHandler(function(responseText) {
+      try {
+        const response = JSON.parse(responseText);
+        if (response.success) {
+          if (onSuccess) onSuccess(response.data);
+        } else {
+          showToast(response.error || 'حدث خطأ غير معروف', 'error');
+          if (onError) onError(response.error);
+        }
+      } catch (e) {
+        showToast('خطأ في تحليل الاستجابة', 'error');
+        if (onError) onError(e.message);
+      }
+    })
+    .withFailureHandler(function(err) {
+      showToast('خطأ في الاتصال: ' + err.message, 'error');
+      if (onError) onError(err.message);
+    })
+    .rpc(action, data || {});
+}
+
+// ===== لوحة التحكم =====
+function renderDashboard() {
+  // حساب الإحصائيات
+  const activeMembers = state.members.filter(function(m) { return m.status === 'نشط'; });
+  const totalContributions = state.contributions.reduce(function(s, c) { return s + Number(c.amount); }, 0);
+  const totalExpenses = state.expenses
+    .filter(function(e) { return e.paidBy === 'الصندوق'; })
+    .reduce(function(s, e) { return s + Number(e.amount); }, 0);
+  const totalSettlements = state.settlements.reduce(function(s, st) { return s + Number(st.amount); }, 0);
+  const treasuryAdjustments = state.adjustments
+    .filter(function(a) { return !a.memberId; })
+    .reduce(function(s, a) { return s + Number(a.amount); }, 0);
+
+  // الحصول على الرصيد الافتتاحي من الإعدادات
+  const openingBalance = state.settings.openingTreasuryCash ? Number(state.settings.openingTreasuryCash) : 0;
+  const treasuryBalance = openingBalance + totalContributions - totalExpenses - totalSettlements + treasuryAdjustments;
+
+  setText('dash-treasury-balance', formatNumber(treasuryBalance));
+  setText('dash-total-contributions', formatNumber(totalContributions));
+  setText('dash-total-expenses', formatNumber(totalExpenses));
+  setText('dash-active-members', activeMembers.length);
+
+  // حساب تفصيلي لكل عضو
+  calculateMemberBalancesLocal();
+
+  // جدول أرصدة الأعضاء
+  const balanceTbody = document.querySelector('#dash-member-balances tbody');
+  balanceTbody.innerHTML = '';
+
+  state.balances
+    .filter(function(b) { return b.status === 'نشط'; })
+    .sort(function(a, b) { return b.totalContributions - a.totalContributions; })
+    .forEach(function(b) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + escHtml(b.displayName) + '</td>' +
+        '<td class="amount-positive">' + formatNumber(b.totalContributions) + ' ريال</td>' +
+        '<td>' + b.contributionCount + '</td>' +
+        '<td>' + (b.lastContributionDate ? formatDateAr(b.lastContributionDate) : '-') + '</td>';
+      balanceTbody.appendChild(tr);
+    });
+
+  if (state.balances.filter(function(b) { return b.status === 'نشط'; }).length === 0) {
+    balanceTbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--gray-500);">لا يوجد أعضاء نشطون</td></tr>';
+  }
+
+  // آخر المعاملات
+  const recentTbody = document.querySelector('#dash-recent-transactions tbody');
+  recentTbody.innerHTML = '';
+
+  const allTransactions = [];
+  state.contributions.forEach(function(c) {
+    allTransactions.push({
+      date: c.operationDate,
+      type: 'مساهمة',
+      detail: c.memberName + ' - ' + c.method,
+      amount: Number(c.amount),
+      isPositive: true
+    });
+  });
+  state.expenses.forEach(function(e) {
+    allTransactions.push({
+      date: e.operationDate,
+      type: 'مصروف',
+      detail: e.category + (e.description ? ' - ' + e.description : ''),
+      amount: Number(e.amount),
+      isPositive: false
+    });
+  });
+
+  allTransactions
+    .sort(function(a, b) { return String(b.date).localeCompare(String(a.date)); })
+    .slice(0, 10)
+    .forEach(function(t) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + formatDateAr(t.date) + '</td>' +
+        '<td>' + escHtml(t.type) + '</td>' +
+        '<td>' + escHtml(t.detail) + '</td>' +
+        '<td class="' + (t.isPositive ? 'amount-positive' : 'amount-negative') + '">' +
+          (t.isPositive ? '+' : '-') + formatNumber(t.amount) + ' ريال</td>';
+      recentTbody.appendChild(tr);
+    });
+
+  if (allTransactions.length === 0) {
+    recentTbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--gray-500);">لا توجد معاملات بعد</td></tr>';
+  }
+
+  // تحميل الإعدادات
+  callApi('getSettings', {}, function(data) { state.settings = data || {}; }, function() {});
+}
+
+function calculateMemberBalancesLocal() {
+  state.balances = state.members.map(function(member) {
+    const totalContributions = state.contributions
+      .filter(function(c) { return c.memberId === member.memberId; })
+      .reduce(function(s, c) { return s + Number(c.amount); }, 0);
+
+    const totalAdjustments = state.adjustments
+      .filter(function(a) { return a.memberId === member.memberId; })
+      .reduce(function(s, a) { return s + Number(a.amount); }, 0);
+
+    const totalSettlements = state.settlements
+      .filter(function(s) { return s.memberId === member.memberId; })
+      .reduce(function(sum, s) { return sum + Number(s.amount); }, 0);
+
+    const memberContribs = state.contributions
+      .filter(function(c) { return c.memberId === member.memberId; })
+      .sort(function(a, b) { return String(b.operationDate).localeCompare(String(a.operationDate)); });
+
+    return {
+      memberId: member.memberId,
+      displayName: member.displayName,
+      status: member.status,
+      totalContributions: Math.round(totalContributions * 100) / 100,
+      totalAdjustments: Math.round(totalAdjustments * 100) / 100,
+      totalSettlements: Math.round(totalSettlements * 100) / 100,
+      netBalance: Math.round((totalContributions + totalAdjustments - totalSettlements) * 100) / 100,
+      contributionCount: memberContribs.length,
+      lastContributionDate: memberContribs.length > 0 ? memberContribs[0].operationDate : null,
+      lastContributionAmount: memberContribs.length > 0 ? Number(memberContribs[0].amount) : null
+    };
+  });
+}
+
+// ===== الأعضاء =====
+function renderMembers() {
+  calculateMemberBalancesLocal();
+  const tbody = document.querySelector('#members-table tbody');
+  tbody.innerHTML = '';
+
+  state.members
+    .sort(function(a, b) { return a.displayName.localeCompare(b.displayName, 'ar'); })
+    .forEach(function(m) {
+      const balance = state.balances.find(function(b) { return b.memberId === m.memberId; });
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><a href="#" onclick="showMemberDetail(\'' + m.memberId + '\');return false;">' + escHtml(m.displayName) + '</a></td>' +
+        '<td>' + formatDateAr(m.joinDate) + '</td>' +
+        '<td>' + statusBadge(m.status) + '</td>' +
+        '<td class="amount-positive">' + formatNumber(balance ? balance.totalContributions : 0) + ' ريال</td>' +
+        '<td>' + (balance && balance.lastContributionDate ? formatDateAr(balance.lastContributionDate) : '-') + '</td>' +
+        '<td>' +
+          '<button class="btn btn-sm btn-secondary" onclick="editMember(\'' + m.memberId + '\')">تعديل</button> ' +
+          (m.status === 'نشط' ? '<button class="btn btn-sm btn-danger" onclick="deactivateMember(\'' + m.memberId + '\')">إيقاف</button>' : '') +
+        '</td>';
+      tbody.appendChild(tr);
+    });
+
+  if (state.members.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-500);">لا يوجد أعضاء. اضغط "+ إضافة عضو" للبدء.</td></tr>';
+  }
+}
+
+function showMemberForm(memberId) {
+  const modal = document.getElementById('member-modal');
+  const title = document.getElementById('member-modal-title');
+  const form = document.getElementById('member-form');
+  form.reset();
+  document.getElementById('member-form-id').value = '';
+
+  if (memberId) {
+    const member = state.members.find(function(m) { return m.memberId === memberId; });
+    if (member) {
+      title.textContent = 'تعديل بيانات العضو';
+      document.getElementById('member-form-id').value = member.memberId;
+      document.getElementById('member-form-name').value = member.displayName;
+      document.getElementById('member-form-joindate').value = member.joinDate;
+      document.getElementById('member-form-phone').value = member.phone || '';
+      document.getElementById('member-form-email').value = member.email || '';
+      document.getElementById('member-form-notes').value = member.notes || '';
+    }
+  } else {
+    title.textContent = 'إضافة عضو جديد';
+    document.getElementById('member-form-joindate').value = getTodayLocal();
+  }
+
+  modal.style.display = 'flex';
+}
+
+function closeMemberForm() {
+  document.getElementById('member-modal').style.display = 'none';
+}
+
+function editMember(memberId) {
+  showMemberForm(memberId);
+}
+
+function submitMemberForm(e) {
+  e.preventDefault();
+  const id = document.getElementById('member-form-id').value;
+  const data = {
+    displayName: document.getElementById('member-form-name').value.trim(),
+    joinDate: document.getElementById('member-form-joindate').value,
+    phone: document.getElementById('member-form-phone').value.trim(),
+    email: document.getElementById('member-form-email').value.trim(),
+    notes: document.getElementById('member-form-notes').value.trim()
+  };
+
+  if (!data.displayName) {
+    showToast('يرجى إدخال اسم العضو', 'error');
+    return;
+  }
+
+  const action = id ? 'updateMember' : 'createMember';
+  if (id) data.memberId = id;
+
+  disableFormButtons('member-form');
+  callApi(action, data, function(result) {
+    showToast(result.message, 'success');
+    closeMemberForm();
+    reloadData(['getMembers'], function() { renderMembers(); });
+  }, function() {
+    enableFormButtons('member-form');
+  });
+}
+
+function deactivateMember(memberId) {
+  const member = state.members.find(function(m) { return m.memberId === memberId; });
+  if (!confirm('هل أنت متأكد من إيقاف العضو "' + member.displayName + '"؟')) return;
+
+  callApi('markMemberInactive', { memberId: memberId }, function(result) {
+    showToast(result.message, 'success');
+    reloadData(['getMembers'], function() { renderMembers(); });
+  });
+}
+
+function showMemberDetail(memberId) {
+  const member = state.members.find(function(m) { return m.memberId === memberId; });
+  if (!member) return;
+
+  document.getElementById('member-detail-title').textContent = 'تفاصيل: ' + member.displayName;
+  document.getElementById('member-detail-modal').style.display = 'flex';
+
+  // حساب الأرصدة المحلية
+  const balance = state.balances.find(function(b) { return b.memberId === memberId; });
+  setText('detail-total-contributions', formatNumber(balance ? balance.totalContributions : 0) + ' ريال');
+  setText('detail-contribution-count', balance ? balance.contributionCount : 0);
+  setText('detail-net-balance', formatNumber(balance ? balance.netBalance : 0) + ' ريال');
+
+  // بناء سجل المعاملات
+  const ledger = [];
+  state.contributions.filter(function(c) { return c.memberId === memberId; }).forEach(function(c) {
+    ledger.push({ date: c.operationDate, type: 'مساهمة', desc: c.method + (c.notes ? ' - ' + c.notes : ''), amount: Number(c.amount) });
+  });
+  state.adjustments.filter(function(a) { return a.memberId === memberId; }).forEach(function(a) {
+    ledger.push({ date: a.operationDate, type: 'تعديل', desc: a.reason || '', amount: Number(a.amount) });
+  });
+  state.settlements.filter(function(s) { return s.memberId === memberId; }).forEach(function(s) {
+    ledger.push({ date: s.operationDate, type: 'تسوية', desc: s.reason || '', amount: -Number(s.amount) });
+  });
+
+  ledger.sort(function(a, b) { return String(a.date).localeCompare(String(b.date)); });
+
+  let running = 0;
+  const tbody = document.querySelector('#member-ledger-table tbody');
+  tbody.innerHTML = '';
+
+  ledger.forEach(function(entry) {
+    running += entry.amount;
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + formatDateAr(entry.date) + '</td>' +
+      '<td>' + escHtml(entry.type) + '</td>' +
+      '<td>' + escHtml(entry.desc) + '</td>' +
+      '<td class="' + (entry.amount >= 0 ? 'amount-positive' : 'amount-negative') + '">' +
+        (entry.amount >= 0 ? '+' : '') + formatNumber(entry.amount) + '</td>' +
+      '<td>' + formatNumber(Math.round(running * 100) / 100) + '</td>';
+    tbody.appendChild(tr);
+  });
+
+  if (ledger.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-500);">لا توجد معاملات لهذا العضو</td></tr>';
+  }
+}
+
+function closeMemberDetail() {
+  document.getElementById('member-detail-modal').style.display = 'none';
+}
+
+// ===== المساهمات =====
+function renderContributions() {
+  const tbody = document.querySelector('#contributions-table tbody');
+  tbody.innerHTML = '';
+
+  state.contributions
+    .sort(function(a, b) { return String(b.operationDate).localeCompare(String(a.operationDate)); })
+    .forEach(function(c) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + formatDateAr(c.operationDate) + '</td>' +
+        '<td>' + escHtml(c.memberName) + '</td>' +
+        '<td class="amount-positive">' + formatNumber(c.amount) + ' ريال</td>' +
+        '<td>' + escHtml(c.method) + (c.bankName ? ' (' + escHtml(c.bankName) + ')' : '') + '</td>' +
+        '<td>' + escHtml(c.notes || '-') + '</td>';
+      tbody.appendChild(tr);
+    });
+
+  if (state.contributions.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-500);">لا توجد مساهمات مسجلة</td></tr>';
+  }
+}
+
+function showContributionForm() {
+  const modal = document.getElementById('contribution-modal');
+  document.getElementById('contribution-form').reset();
+
+  // تعبئة قائمة الأعضاء
+  const select = document.getElementById('contrib-member');
+  select.innerHTML = '<option value="">اختر العضو...</option>';
+  state.members.filter(function(m) { return m.status === 'نشط'; })
+    .sort(function(a, b) { return a.displayName.localeCompare(b.displayName, 'ar'); })
+    .forEach(function(m) {
+      select.innerHTML += '<option value="' + m.memberId + '">' + escHtml(m.displayName) + '</option>';
+    });
+
+  // تعبئة قائمة البنوك
+  const bankSelect = document.getElementById('contrib-bank');
+  bankSelect.innerHTML = '<option value="">اختر البنك...</option>';
+  state.banks.filter(function(b) { return b.isActive; }).forEach(function(b) {
+    bankSelect.innerHTML += '<option value="' + escHtml(b.bankName) + '">' + escHtml(b.bankName) + '</option>';
+  });
+
+  document.getElementById('contrib-date').value = getTodayLocal();
+  document.getElementById('contrib-bank-group').style.display = 'none';
+  modal.style.display = 'flex';
+}
+
+function closeContributionForm() {
+  document.getElementById('contribution-modal').style.display = 'none';
+}
+
+function toggleBankField() {
+  const method = document.getElementById('contrib-method').value;
+  document.getElementById('contrib-bank-group').style.display = method === 'تحويل بنكي' ? 'block' : 'none';
+}
+
+function submitContributionForm(e) {
+  e.preventDefault();
+  const data = {
+    memberId: document.getElementById('contrib-member').value,
+    operationDate: document.getElementById('contrib-date').value,
+    amount: document.getElementById('contrib-amount').value,
+    method: document.getElementById('contrib-method').value,
+    bankName: document.getElementById('contrib-bank').value,
+    notes: document.getElementById('contrib-notes').value.trim()
+  };
+
+  if (!data.memberId) { showToast('يرجى اختيار العضو', 'error'); return; }
+  if (!data.operationDate) { showToast('يرجى تحديد التاريخ', 'error'); return; }
+  if (!data.amount || Number(data.amount) <= 0) { showToast('يرجى إدخال مبلغ صحيح', 'error'); return; }
+
+  disableFormButtons('contribution-form');
+  callApi('createContribution', data, function(result) {
+    showToast(result.message, 'success');
+    closeContributionForm();
+    reloadData(['getContributions'], function() { renderContributions(); });
+  }, function() {
+    enableFormButtons('contribution-form');
+  });
+}
+
+// ===== المصروفات =====
+function renderExpenses() {
+  const tbody = document.querySelector('#expenses-table tbody');
+  tbody.innerHTML = '';
+
+  state.expenses
+    .sort(function(a, b) { return String(b.operationDate).localeCompare(String(a.operationDate)); })
+    .forEach(function(e) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + formatDateAr(e.operationDate) + '</td>' +
+        '<td>' + escHtml(e.category) + '</td>' +
+        '<td>' + escHtml(e.description || '-') + '</td>' +
+        '<td class="amount-negative">' + formatNumber(e.amount) + ' ريال</td>' +
+        '<td>' + escHtml(e.paidBy) + (e.memberName ? ' (' + escHtml(e.memberName) + ')' : '') + '</td>';
+      tbody.appendChild(tr);
+    });
+
+  if (state.expenses.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-500);">لا توجد مصروفات مسجلة</td></tr>';
+  }
+}
+
+function showExpenseForm() {
+  const modal = document.getElementById('expense-modal');
+  document.getElementById('expense-form').reset();
+
+  // تعبئة الفئات
+  const catSelect = document.getElementById('expense-category');
+  catSelect.innerHTML = '<option value="">اختر الفئة...</option>';
+  state.categories.filter(function(c) { return c.isActive; }).forEach(function(c) {
+    catSelect.innerHTML += '<option value="' + escHtml(c.categoryName) + '">' + escHtml(c.categoryName) + '</option>';
+  });
+
+  // تعبئة الأعضاء
+  const memberSelect = document.getElementById('expense-member');
+  memberSelect.innerHTML = '<option value="">اختر العضو...</option>';
+  state.members.filter(function(m) { return m.status === 'نشط'; })
+    .sort(function(a, b) { return a.displayName.localeCompare(b.displayName, 'ar'); })
+    .forEach(function(m) {
+      memberSelect.innerHTML += '<option value="' + m.memberId + '">' + escHtml(m.displayName) + '</option>';
+    });
+
+  document.getElementById('expense-date').value = getTodayLocal();
+  document.getElementById('expense-member-group').style.display = 'none';
+  modal.style.display = 'flex';
+}
+
+function closeExpenseForm() {
+  document.getElementById('expense-modal').style.display = 'none';
+}
+
+function toggleExpenseMemberField() {
+  const paidBy = document.getElementById('expense-paidby').value;
+  document.getElementById('expense-member-group').style.display = paidBy === 'عضو' ? 'block' : 'none';
+}
+
+function submitExpenseForm(e) {
+  e.preventDefault();
+  const data = {
+    operationDate: document.getElementById('expense-date').value,
+    category: document.getElementById('expense-category').value,
+    description: document.getElementById('expense-description').value.trim(),
+    amount: document.getElementById('expense-amount').value,
+    paidBy: document.getElementById('expense-paidby').value,
+    memberId: document.getElementById('expense-member').value,
+    notes: document.getElementById('expense-notes').value.trim()
+  };
+
+  if (!data.operationDate) { showToast('يرجى تحديد التاريخ', 'error'); return; }
+  if (!data.category) { showToast('يرجى اختيار الفئة', 'error'); return; }
+  if (!data.amount || Number(data.amount) <= 0) { showToast('يرجى إدخال مبلغ صحيح', 'error'); return; }
+
+  disableFormButtons('expense-form');
+  callApi('createExpense', data, function(result) {
+    showToast(result.message, 'success');
+    closeExpenseForm();
+    reloadData(['getExpenses'], function() { renderExpenses(); });
+  }, function() {
+    enableFormButtons('expense-form');
+  });
+}
+
+// ===== التعديلات =====
+function renderAdjustments() {
+  const tbody = document.querySelector('#adjustments-table tbody');
+  tbody.innerHTML = '';
+
+  state.adjustments
+    .sort(function(a, b) { return String(b.operationDate).localeCompare(String(a.operationDate)); })
+    .forEach(function(a) {
+      const tr = document.createElement('tr');
+      const amt = Number(a.amount);
+      tr.innerHTML =
+        '<td>' + formatDateAr(a.operationDate) + '</td>' +
+        '<td>' + escHtml(a.entityType || 'عام') + '</td>' +
+        '<td>' + escHtml(a.memberName || 'الصندوق') + '</td>' +
+        '<td class="' + (amt >= 0 ? 'amount-positive' : 'amount-negative') + '">' +
+          (amt >= 0 ? '+' : '') + formatNumber(amt) + ' ريال</td>' +
+        '<td>' + escHtml(a.reason || '-') + '</td>';
+      tbody.appendChild(tr);
+    });
+
+  if (state.adjustments.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-500);">لا توجد تعديلات</td></tr>';
+  }
+}
+
+function showAdjustmentForm() {
+  const modal = document.getElementById('adjustment-modal');
+  document.getElementById('adjustment-form').reset();
+
+  // تعبئة الأعضاء
+  const memberSelect = document.getElementById('adj-member');
+  memberSelect.innerHTML = '<option value="">اختر العضو...</option>';
+  state.members
+    .sort(function(a, b) { return a.displayName.localeCompare(b.displayName, 'ar'); })
+    .forEach(function(m) {
+      memberSelect.innerHTML += '<option value="' + m.memberId + '">' + escHtml(m.displayName) + '</option>';
+    });
+
+  document.getElementById('adj-date').value = getTodayLocal();
+  document.getElementById('adj-member-group').style.display = 'block';
+  document.getElementById('adj-type').value = 'عضو';
+  modal.style.display = 'flex';
+}
+
+function closeAdjustmentForm() {
+  document.getElementById('adjustment-modal').style.display = 'none';
+}
+
+function submitAdjustmentForm(e) {
+  e.preventDefault();
+  const adjType = document.getElementById('adj-type').value;
+  const data = {
+    operationDate: document.getElementById('adj-date').value,
+    entityType: adjType,
+    memberId: adjType === 'عضو' ? document.getElementById('adj-member').value : '',
+    amount: document.getElementById('adj-amount').value,
+    reason: document.getElementById('adj-reason').value.trim()
+  };
+
+  if (!data.operationDate) { showToast('يرجى تحديد التاريخ', 'error'); return; }
+  if (!data.amount || Number(data.amount) === 0) { showToast('يرجى إدخال مبلغ غير صفري', 'error'); return; }
+  if (!data.reason) { showToast('يرجى إدخال سبب التعديل', 'error'); return; }
+  if (adjType === 'عضو' && !data.memberId) { showToast('يرجى اختيار العضو', 'error'); return; }
+
+  disableFormButtons('adjustment-form');
+  callApi('createAdjustment', data, function(result) {
+    showToast(result.message, 'success');
+    closeAdjustmentForm();
+    reloadData(['getAdjustments'], function() { renderAdjustments(); });
+  }, function() {
+    enableFormButtons('adjustment-form');
+  });
+}
+
+// ===== التقارير =====
+function generateReport() {
+  const startDate = document.getElementById('report-start-date').value;
+  const endDate = document.getElementById('report-end-date').value;
+
+  callApi('getSnapshot', { startDate: startDate, endDate: endDate }, function(data) {
+    document.getElementById('report-content').style.display = 'block';
+
+    setText('report-contributions-total', formatNumber(data.periodContributionsTotal || 0));
+    setText('report-expenses-total', formatNumber(data.periodExpensesTotal || 0));
+    setText('report-net', formatNumber((data.periodContributionsTotal || 0) - (data.periodExpensesTotal || 0)));
+
+    // المصروفات حسب الفئة
+    const catTbody = document.querySelector('#report-expenses-by-category tbody');
+    catTbody.innerHTML = '';
+    if (data.expensesByCategory) {
+      Object.keys(data.expensesByCategory).forEach(function(cat) {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + escHtml(cat) + '</td>' +
+          '<td class="amount-negative">' + formatNumber(data.expensesByCategory[cat]) + ' ريال</td>';
+        catTbody.appendChild(tr);
+      });
+    }
+    if (catTbody.children.length === 0) {
+      catTbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--gray-500);">لا توجد مصروفات في الفترة</td></tr>';
+    }
+
+    // مساهمات الأعضاء
+    const memberTbody = document.querySelector('#report-member-contributions tbody');
+    memberTbody.innerHTML = '';
+    if (data.balances) {
+      data.balances
+        .filter(function(b) { return b.totalContributions > 0; })
+        .sort(function(a, b) { return b.totalContributions - a.totalContributions; })
+        .forEach(function(b) {
+          const tr = document.createElement('tr');
+          tr.innerHTML =
+            '<td>' + escHtml(b.displayName) + '</td>' +
+            '<td class="amount-positive">' + formatNumber(b.totalContributions) + ' ريال</td>' +
+            '<td>' + b.contributionCount + '</td>';
+          memberTbody.appendChild(tr);
+        });
+    }
+    if (memberTbody.children.length === 0) {
+      memberTbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--gray-500);">لا توجد مساهمات</td></tr>';
+    }
+  });
+}
+
+function exportToExcel() {
+  try {
+    const wb = XLSX.utils.book_new();
+
+    // ورقة المساهمات
+    const contribData = state.contributions.map(function(c) {
+      return {
+        'التاريخ': c.operationDate,
+        'العضو': c.memberName,
+        'المبلغ': Number(c.amount),
+        'طريقة الدفع': c.method,
+        'البنك': c.bankName || '',
+        'ملاحظات': c.notes || ''
+      };
+    });
+    if (contribData.length > 0) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(contribData), 'المساهمات');
+    }
+
+    // ورقة المصروفات
+    const expData = state.expenses.map(function(e) {
+      return {
+        'التاريخ': e.operationDate,
+        'الفئة': e.category,
+        'الوصف': e.description || '',
+        'المبلغ': Number(e.amount),
+        'الدافع': e.paidBy,
+        'ملاحظات': e.notes || ''
+      };
+    });
+    if (expData.length > 0) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(expData), 'المصروفات');
+    }
+
+    // ورقة الأعضاء
+    calculateMemberBalancesLocal();
+    const memberData = state.balances.map(function(b) {
+      return {
+        'العضو': b.displayName,
+        'الحالة': b.status,
+        'إجمالي المساهمات': b.totalContributions,
+        'عدد المساهمات': b.contributionCount,
+        'آخر مساهمة': b.lastContributionDate || ''
+      };
+    });
+    if (memberData.length > 0) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(memberData), 'الأعضاء');
+    }
+
+    XLSX.writeFile(wb, 'تقرير_صندوق_التكافل.xlsx');
+    showToast('تم تصدير التقرير إلى Excel بنجاح', 'success');
+  } catch (err) {
+    showToast('خطأ في التصدير: ' + err.message, 'error');
+  }
+}
+
+function exportToPdf() {
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'landscape' });
+
+    doc.setFontSize(18);
+    doc.text('Fund Report - Takaful Fund', 14, 22);
+    doc.setFontSize(10);
+    doc.text('Date: ' + getTodayLocal(), 14, 30);
+
+    // جدول الأعضاء
+    calculateMemberBalancesLocal();
+    const memberRows = state.balances.map(function(b) {
+      return [b.displayName, b.status, String(b.totalContributions), String(b.contributionCount), b.lastContributionDate || '-'];
+    });
+
+    doc.autoTable({
+      startY: 38,
+      head: [['Member', 'Status', 'Total Contributions', 'Count', 'Last Contribution']],
+      body: memberRows,
+      theme: 'grid',
+      styles: { fontSize: 9, halign: 'center' },
+      headStyles: { fillColor: [26, 115, 232] }
+    });
+
+    doc.save('takaful_fund_report.pdf');
+    showToast('تم تصدير التقرير إلى PDF بنجاح', 'success');
+  } catch (err) {
+    showToast('خطأ في التصدير: ' + err.message, 'error');
+  }
+}
+
+// ===== الإعدادات =====
+function renderSettings() {
+  callApi('getSettings', {}, function(data) {
+    state.settings = data || {};
+    document.getElementById('setting-fund-name').value = data.fundName || '';
+    document.getElementById('setting-opening-balance').value = data.openingTreasuryCash || '0';
+    document.getElementById('setting-currency').value = data.currency || 'ريال';
+  });
+
+  // تحديث قائمة البنوك
+  callApi('getBanks', {}, function(data) {
+    state.banks = data || [];
+    const list = document.getElementById('banks-list');
+    list.innerHTML = '';
+    state.banks.forEach(function(b) {
+      const li = document.createElement('li');
+      li.textContent = b.bankName;
+      list.appendChild(li);
+    });
+    if (state.banks.length === 0) {
+      list.innerHTML = '<li style="color:var(--gray-500);">لا توجد بنوك</li>';
+    }
+  });
+
+  // تحديث قائمة الفئات
+  callApi('getCategories', {}, function(data) {
+    state.categories = data || [];
+    const list = document.getElementById('categories-list');
+    list.innerHTML = '';
+    state.categories.forEach(function(c) {
+      const li = document.createElement('li');
+      li.textContent = c.categoryName;
+      list.appendChild(li);
+    });
+    if (state.categories.length === 0) {
+      list.innerHTML = '<li style="color:var(--gray-500);">لا توجد فئات</li>';
+    }
+  });
+
+  // سجل المراجعة
+  callApi('getAuditLog', {}, function(data) {
+    const tbody = document.querySelector('#audit-log-table tbody');
+    tbody.innerHTML = '';
+    (data || []).slice(0, 50).forEach(function(log) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td style="font-size:0.8rem;">' + escHtml(String(log.timestamp || '').replace('T', ' ').substring(0, 19)) + '</td>' +
+        '<td>' + escHtml(translateAction(log.action)) + '</td>' +
+        '<td>' + escHtml(translateEntityType(log.entityType)) + '</td>' +
+        '<td style="font-size:0.8rem;">' + escHtml(summarizeLog(log)) + '</td>';
+      tbody.appendChild(tr);
+    });
+    if (!data || data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--gray-500);">لا توجد سجلات</td></tr>';
+    }
+  });
+}
+
+function initializeSystem() {
+  if (!confirm('هل أنت متأكد من تهيئة النظام؟ سيتم إنشاء الأوراق المطلوبة.')) return;
+
+  callApi('initializeSystem', {}, function(result) {
+    const div = document.getElementById('init-result');
+    div.innerHTML = '<p style="color:var(--success);">' + escHtml(result.message) + '</p>' +
+      '<p>الأوراق المنشأة: ' + (result.sheetsCreated || []).join(', ') + '</p>' +
+      '<p>الأوراق الموجودة: ' + (result.sheetsExisting || []).join(', ') + '</p>';
+    showToast(result.message, 'success');
+    loadAllData();
+  });
+}
+
+function submitSettingsForm(e) {
+  e.preventDefault();
+  const settings = {
+    fundName: document.getElementById('setting-fund-name').value.trim(),
+    openingTreasuryCash: document.getElementById('setting-opening-balance').value,
+    currency: document.getElementById('setting-currency').value.trim()
+  };
+
+  let saved = 0;
+  const keys = Object.keys(settings);
+  keys.forEach(function(key) {
+    callApi('updateSetting', { key: key, value: settings[key] }, function() {
+      saved++;
+      if (saved === keys.length) {
+        showToast('تم حفظ الإعدادات بنجاح', 'success');
+        state.settings = Object.assign(state.settings, settings);
+      }
+    });
+  });
+}
+
+function submitBankForm(e) {
+  e.preventDefault();
+  const name = document.getElementById('bank-name-input').value.trim();
+  if (!name) return;
+
+  callApi('createBank', { bankName: name }, function(result) {
+    showToast(result.message, 'success');
+    document.getElementById('bank-name-input').value = '';
+    renderSettings();
+  });
+}
+
+function submitCategoryForm(e) {
+  e.preventDefault();
+  const name = document.getElementById('category-name-input').value.trim();
+  if (!name) return;
+
+  callApi('createCategory', { categoryName: name }, function(result) {
+    showToast(result.message, 'success');
+    document.getElementById('category-name-input').value = '';
+    renderSettings();
+  });
+}
+
+// ===== الأدوات المساعدة =====
+
+function showToast(message, type) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-' + (type || 'info');
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(function() {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.3s';
+    setTimeout(function() { toast.remove(); }, 300);
+  }, 4000);
+}
+
+function showLoading() {
+  document.getElementById('loading-overlay').classList.remove('hidden');
+}
+
+function hideLoading() {
+  document.getElementById('loading-overlay').classList.add('hidden');
+}
+
+function setText(id, text) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+function escHtml(str) {
+  if (!str) return '';
+  var div = document.createElement('div');
+  div.textContent = String(str);
+  return div.innerHTML;
+}
+
+function formatNumber(num) {
+  var n = Number(num);
+  if (isNaN(n)) return '0';
+  return n.toLocaleString('ar-SA', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+function formatDateAr(dateStr) {
+  if (!dateStr) return '';
+  var str = String(dateStr);
+  var parts = str.split('-');
+  if (parts.length !== 3) return str;
+  var months = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  var m = parseInt(parts[1], 10);
+  return parts[2] + ' ' + months[m - 1] + ' ' + parts[0];
+}
+
+function getTodayLocal() {
+  var now = new Date();
+  var y = now.getFullYear();
+  var m = String(now.getMonth() + 1).padStart(2, '0');
+  var d = String(now.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + d;
+}
+
+function statusBadge(status) {
+  var cls = 'status-active';
+  if (status === 'غير نشط') cls = 'status-inactive';
+  if (status === 'مغلق') cls = 'status-closed';
+  return '<span class="status-badge ' + cls + '">' + escHtml(status) + '</span>';
+}
+
+function disableFormButtons(formId) {
+  document.querySelectorAll('#' + formId + ' button').forEach(function(btn) {
+    btn.disabled = true;
+  });
+}
+
+function enableFormButtons(formId) {
+  document.querySelectorAll('#' + formId + ' button').forEach(function(btn) {
+    btn.disabled = false;
+  });
+}
+
+function reloadData(actions, callback) {
+  var loaded = 0;
+  actions.forEach(function(action) {
+    callApi(action, {}, function(data) {
+      switch (action) {
+        case 'getMembers': state.members = data || []; break;
+        case 'getContributions': state.contributions = data || []; break;
+        case 'getExpenses': state.expenses = data || []; break;
+        case 'getAdjustments': state.adjustments = data || []; break;
+        case 'getSettlements': state.settlements = data || []; break;
+        case 'getBanks': state.banks = data || []; break;
+        case 'getCategories': state.categories = data || []; break;
+      }
+      loaded++;
+      if (loaded >= actions.length && callback) callback();
+    }, function() {
+      loaded++;
+      if (loaded >= actions.length && callback) callback();
+    });
+  });
+}
+
+function translateAction(action) {
+  var map = {
+    'SYSTEM_INIT': 'تهيئة النظام',
+    'CREATE_MEMBER': 'إضافة عضو',
+    'UPDATE_MEMBER': 'تعديل عضو',
+    'MEMBER_STATUS_CHANGE': 'تغيير حالة عضو',
+    'CREATE_CONTRIBUTION': 'تسجيل مساهمة',
+    'CREATE_EXPENSE': 'تسجيل مصروف',
+    'CREATE_ADJUSTMENT': 'تسجيل تعديل',
+    'CREATE_SETTLEMENT': 'تسجيل تسوية',
+    'CREATE_BANK': 'إضافة بنك',
+    'CREATE_CATEGORY': 'إضافة فئة',
+    'UPDATE_SETTING': 'تحديث إعداد'
+  };
+  return map[action] || action;
+}
+
+function translateEntityType(type) {
+  var map = {
+    'System': 'النظام',
+    'Member': 'عضو',
+    'Contribution': 'مساهمة',
+    'Expense': 'مصروف',
+    'Adjustment': 'تعديل',
+    'Settlement': 'تسوية',
+    'Bank': 'بنك',
+    'Category': 'فئة',
+    'Setting': 'إعداد'
+  };
+  return map[type] || type;
+}
+
+function summarizeLog(log) {
+  if (!log.afterState) return '';
+  var state = typeof log.afterState === 'string' ? log.afterState : '';
+  try {
+    var obj = typeof log.afterState === 'object' ? log.afterState : JSON.parse(log.afterState);
+    var parts = [];
+    if (obj.displayName) parts.push(obj.displayName);
+    if (obj.memberName) parts.push(obj.memberName);
+    if (obj.bankName) parts.push(obj.bankName);
+    if (obj.categoryName) parts.push(obj.categoryName);
+    if (obj.amount !== undefined) parts.push(obj.amount + ' ريال');
+    if (obj.status) parts.push(obj.status);
+    return parts.join(' | ');
+  } catch (e) {
+    return state;
+  }
+}
+</script>
